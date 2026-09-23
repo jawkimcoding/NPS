@@ -318,11 +318,11 @@ function renderCurrentSheet() {
 function renderAllCharts(chartsData) {
   const chartBlue = '#4472C4'; // Office 기본 테마 단색 블루
 
-  // Chart 0: 교육과정내용 만족도 추이 (Full Width)
-  renderBarChart('chartSatisfactionTrend', chartsData.chart0_satisfaction_trend.categories, chartsData.chart0_satisfaction_trend.values, '만족도', chartBlue, 5);
+  // Chart 0: 교육과정내용 만족도 추이 (1회차: 막대그래프, 누적 2회차 이상: 꺾은선그래프)
+  renderTrendChart('chartSatisfactionTrend', chartsData.chart0_satisfaction_trend.categories, chartsData.chart0_satisfaction_trend.values, '만족도', chartBlue, 5);
 
-  // Chart 1: 추천지수(NPS) 추이 (Full Width)
-  renderBarChart('chartNpsTrend', chartsData.chart1_nps_trend.categories, chartsData.chart1_nps_trend.values, 'NPS', chartBlue, 100);
+  // Chart 1: 추천지수(NPS) 추이 (1회차: 막대그래프, 누적 2회차 이상: 꺾은선그래프)
+  renderTrendChart('chartNpsTrend', chartsData.chart1_nps_trend.categories, chartsData.chart1_nps_trend.values, 'NPS', chartBlue, 100);
 
   // Chart 4: 교육생 직급 (Half Width)
   renderBarChart('chartPositions', chartsData.chart4_positions.categories, chartsData.chart4_positions.values, '인원', chartBlue);
@@ -335,6 +335,65 @@ function renderAllCharts(chartsData) {
 
   // Chart 2: 교육운영 불편요소 (Half Width)
   renderBarChart('chartComplaints', chartsData.chart2_complaints.categories, chartsData.chart2_complaints.values, '건수', chartBlue);
+}
+
+// 만족도 및 NPS 추이 차트 (1회차는 막대, 2회차 이상 누적 시 꺾은선으로 렌더링)
+function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
+  if (charts[canvasId]) {
+    charts[canvasId].destroy();
+  }
+
+  const isLine = labels && labels.length > 1;
+  const ctx = document.getElementById(canvasId).getContext('2d');
+
+  if (isLine) {
+    charts[canvasId] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: label,
+          data: data,
+          borderColor: color,
+          backgroundColor: color,
+          borderWidth: 2.5,
+          pointBackgroundColor: color,
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 1.5,
+          pointRadius: 4.5,
+          pointHoverRadius: 6,
+          fill: false,
+          tension: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (item) => ` ${label}: ${item.formattedValue}`
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            suggestedMax: maxVal,
+            grid: { color: '#e5e7eb' },
+            ticks: { font: { size: 10, family: 'Malgun Gothic' } }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { font: { size: 10, family: 'Malgun Gothic' } }
+          }
+        }
+      }
+    });
+  } else {
+    renderBarChart(canvasId, labels, data, label, color, maxVal);
+  }
 }
 
 function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {

@@ -618,10 +618,15 @@ class ClientEngine {
           const baseDrawingXml = await zip.file('xl/drawings/drawing1.xml').async('string');
           const baseDrawingRels = await zip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
 
-          const baseChartsXml = [];
-          for (let c = 1; c <= 6; c++) {
-            baseChartsXml.push(await zip.file(`xl/charts/chart${c}.xml`).async('string'));
-          }
+          // 1회차(막대) 및 누적회차(꺾은선) 차트 원형 템플릿 추출
+          const chartBarSat = await zip.file('xl/charts/chart1.xml').async('string');
+          const chartBarNps = await zip.file('xl/charts/chart2.xml').async('string');
+          const chartLineSat = await zip.file('xl/charts/chart7.xml').async('string');
+          const chartLineNps = await zip.file('xl/charts/chart8.xml').async('string');
+          const chartComplaints = await zip.file('xl/charts/chart3.xml').async('string');
+          const chartPreferred = await zip.file('xl/charts/chart4.xml').async('string');
+          const chartPositions = await zip.file('xl/charts/chart5.xml').async('string');
+          const chartMotives = await zip.file('xl/charts/chart6.xml').async('string');
 
           // 기존 시트/드로잉/차트 파일 정리
           const removeKeys = [];
@@ -711,19 +716,29 @@ class ClientEngine {
             }
             zip.file(`xl/drawings/_rels/drawing${drawingNum}.xml.rels`, dRels);
 
-            // 5. 6개 차트 주입
+            // 5. 6개 차트 주입 (1회차는 막대, 2회차 이상 누적 시 꺾은선으로 자동 전환)
             const chartsData = sdata.charts || {};
+            const c0Data = chartsData.chart0_satisfaction_trend || {};
+            const c1Data = chartsData.chart1_nps_trend || {};
+
+            const cats0 = c0Data.categories || [];
+            const cats1 = c1Data.categories || [];
+
+            // 교육과정내용 만족도 및 추천지수: 누적(2개 이상)이면 lineChart(꺾은선), 1개이면 barChart(막대)
+            const c0Template = cats0.length > 1 ? chartLineSat : chartBarSat;
+            const c1Template = cats1.length > 1 ? chartLineNps : chartBarNps;
+
             const chartDefs = [
-              [chartsData.chart0_satisfaction_trend, true, true],
-              [chartsData.chart1_nps_trend, true, true],
-              [chartsData.chart2_complaints, false, false],
-              [chartsData.chart3_preferred_format, false, false],
-              [chartsData.chart4_positions, false, false],
-              [chartsData.chart5_motives, false, false],
+              [c0Template, c0Data, true, true],
+              [c1Template, c1Data, true, true],
+              [chartComplaints, chartsData.chart2_complaints || {}, false, false],
+              [chartPreferred, chartsData.chart3_preferred_format || {}, false, false],
+              [chartPositions, chartsData.chart4_positions || {}, false, false],
+              [chartMotives, chartsData.chart5_motives || {}, false, false],
             ];
 
-            chartDefs.forEach(([cData, isRef, isFloat], cIdx) => {
-              let cXml = baseChartsXml[cIdx];
+            chartDefs.forEach(([tXml, cData, isRef, isFloat], cIdx) => {
+              let cXml = tXml;
               if (cData && cData.categories && cData.values) {
                 cXml = this.updateChartXml(cXml, cData.categories, cData.values, isRef, isFloat);
               }

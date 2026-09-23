@@ -132,7 +132,16 @@ class ExcelGenerator:
         base_sheet_rels = files["xl/worksheets/_rels/sheet1.xml.rels"].decode("utf-8")
         base_drawing_xml = files["xl/drawings/drawing1.xml"].decode("utf-8")
         base_drawing_rels = files["xl/drawings/_rels/drawing1.xml.rels"].decode("utf-8")
-        base_charts_xml = [files[f"xl/charts/chart{c}.xml"].decode("utf-8") for c in range(1, 7)]
+
+        # 1회차(막대) 및 누적회차(꺾은선) 차트 원형 템플릿 추출
+        chart_bar_sat = files["xl/charts/chart1.xml"].decode("utf-8")
+        chart_bar_nps = files["xl/charts/chart2.xml"].decode("utf-8")
+        chart_line_sat = files["xl/charts/chart7.xml"].decode("utf-8")
+        chart_line_nps = files["xl/charts/chart8.xml"].decode("utf-8")
+        chart_complaints = files["xl/charts/chart3.xml"].decode("utf-8")
+        chart_preferred = files["xl/charts/chart4.xml"].decode("utf-8")
+        chart_positions = files["xl/charts/chart5.xml"].decode("utf-8")
+        chart_motives = files["xl/charts/chart6.xml"].decode("utf-8")
 
         # 기존 시트/드로잉/차트 파일 정리
         keys_to_remove = [
@@ -217,19 +226,29 @@ class ExcelGenerator:
                 d_rels = d_rels.replace(orig_target, new_target)
             files[f"xl/drawings/_rels/drawing{drawing_num}.xml.rels"] = d_rels.encode("utf-8")
 
-            # 5. 6개 차트 데이터 주입
+            # 5. 6개 차트 데이터 주입 (1회차는 막대, 2회차 이상 누적 시 꺾은선으로 자동 전환)
             charts_data = sdata.get("charts", {})
+            c0_data = charts_data.get("chart0_satisfaction_trend", {})
+            c1_data = charts_data.get("chart1_nps_trend", {})
+
+            cats0 = c0_data.get("categories", [])
+            cats1 = c1_data.get("categories", [])
+
+            # 교육과정내용 만족도 및 추천지수: 누적(2개 이상)이면 lineChart(꺾은선), 1개이면 barChart(막대)
+            c0_template = chart_line_sat if len(cats0) > 1 else chart_bar_sat
+            c1_template = chart_line_nps if len(cats1) > 1 else chart_bar_nps
+
             chart_defs = [
-                (charts_data.get("chart0_satisfaction_trend", {}), True, True),
-                (charts_data.get("chart1_nps_trend", {}), True, True),
-                (charts_data.get("chart2_complaints", {}), False, False),
-                (charts_data.get("chart3_preferred_format", {}), False, False),
-                (charts_data.get("chart4_positions", {}), False, False),
-                (charts_data.get("chart5_motives", {}), False, False),
+                (c0_template, c0_data, True, True),
+                (c1_template, c1_data, True, True),
+                (chart_complaints, charts_data.get("chart2_complaints", {}), False, False),
+                (chart_preferred, charts_data.get("chart3_preferred_format", {}), False, False),
+                (chart_positions, charts_data.get("chart4_positions", {}), False, False),
+                (chart_motives, charts_data.get("chart5_motives", {}), False, False),
             ]
 
-            for c_idx, (c_data, is_ref, is_float) in enumerate(chart_defs):
-                c_xml = base_charts_xml[c_idx]
+            for c_idx, (t_xml, c_data, is_ref, is_float) in enumerate(chart_defs):
+                c_xml = t_xml
                 cats = c_data.get("categories", [])
                 vals = c_data.get("values", [])
                 if cats and vals:
