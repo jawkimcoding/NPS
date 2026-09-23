@@ -124,26 +124,65 @@ class DataManager:
             json.dump(self.curriculums, f, ensure_ascii=False, indent=2)
 
     def import_raw_excel(self, file_path: str) -> int:
-        """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장"""
+        """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장 (지능형 헤더 감지)"""
         wb = openpyxl.load_workbook(file_path, data_only=True)
         ws = wb.active
 
-        # 1~2행 헤더 파악
+        # 1. 헤더 행 위치 지능형 탐색
+        header_row_idx = 2  # 기본값
+        for r in range(1, min(10, ws.max_row + 1)):
+            row_vals = [str(ws.cell(r, c).value or '').strip() for c in range(1, min(20, ws.max_column + 1))]
+            if any('과정명' in v for v in row_vals):
+                header_row_idx = r
+                break
+
+        # 헤더 컬럼 맵핑 구성
+        col_map = {}
+        for c in range(1, ws.max_column + 1):
+            val = str(ws.cell(header_row_idx, c).value or '').strip()
+            if not val and header_row_idx > 1:
+                # 상위 행 확인 (예: 추천지수(NPS), 과정만족도 등)
+                val = str(ws.cell(header_row_idx - 1, c).value or '').strip()
+            if val:
+                col_map[val] = c
+
+        def get_col(keywords, default_c):
+            for k, c in col_map.items():
+                for kw in keywords:
+                    if kw in k:
+                        return c
+            return default_c
+
+        c_course = get_col(['과정명', '과정'], 1)
+        c_sched = get_col(['교육일정', '일정', '차수'], 2)
+        c_region = get_col(['지역'], 3)
+        c_inst = get_col(['강사명', '강사'], 4)
+        c_hours = get_col(['강의시간', '시간'], 5)
+        c_sent = get_col(['발송수'], 6)
+        c_resp = get_col(['응답수'], 7)
+        c_nps = get_col(['추천지수', 'NPS'], 8)
+        c_course_sat = get_col(['과정만족도'], 9)
+        c_inst_avg = get_col(['만족도평균'], 10)
+        c_expertise = get_col(['강의전문성', '강의내용'], 11)
+        c_delivery = get_col(['전달능력'], 12)
+        c_practical = get_col(['교육효과성', '실무활용도'], 13)
+        c_textbook = get_col(['교재완성도'], 14)
+
         imported_count = 0
         existing_keys = {
             f"{r.get('course_name')}_{r.get('schedule_raw')}_{r.get('instructor_name')}": idx 
             for idx, r in enumerate(self.records)
         }
 
-        for row_idx in range(3, ws.max_row + 1):
-            course_name = ws.cell(row_idx, 1).value
-            if not course_name or str(course_name).strip() == '':
+        for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+            course_name = ws.cell(row_idx, c_course).value
+            if not course_name or str(course_name).strip() == '' or str(course_name).strip() == '과정명':
                 continue
             
             course_name = str(course_name).strip()
-            schedule_raw = str(ws.cell(row_idx, 2).value or "").strip()
-            region = str(ws.cell(row_idx, 3).value or "").strip()
-            instructor_name = str(ws.cell(row_idx, 4).value or "").strip()
+            schedule_raw = str(ws.cell(row_idx, c_sched).value or "").strip()
+            region = str(ws.cell(row_idx, c_region).value or "").strip()
+            instructor_name = str(ws.cell(row_idx, c_inst).value or "").strip()
             
             sched_info = parse_schedule(schedule_raw)
 
@@ -157,16 +196,16 @@ class DataManager:
                 "display_period": sched_info["display_period"],
                 "region": region,
                 "instructor_name": instructor_name,
-                "hours": safe_int(ws.cell(row_idx, 5).value),
-                "sent_count": safe_int(ws.cell(row_idx, 6).value),
-                "respondent_count": safe_int(ws.cell(row_idx, 7).value),
-                "nps": safe_float(ws.cell(row_idx, 8).value),
-                "course_satisfaction": safe_float(ws.cell(row_idx, 9).value),
-                "instructor_satisfaction_avg": safe_float(ws.cell(row_idx, 10).value),
-                "teaching_expertise": safe_float(ws.cell(row_idx, 11).value),   # 강의내용 (강의전문성)
-                "delivery_skill": safe_float(ws.cell(row_idx, 12).value),       # 전달능력
-                "practical_use": safe_float(ws.cell(row_idx, 13).value),        # 실무활용도 (교육효과성)
-                "textbook_quality": safe_float(ws.cell(row_idx, 14).value),     # 교재완성도
+                "hours": safe_int(ws.cell(row_idx, c_hours).value),
+                "sent_count": safe_int(ws.cell(row_idx, c_sent).value),
+                "respondent_count": safe_int(ws.cell(row_idx, c_resp).value),
+                "nps": safe_float(ws.cell(row_idx, c_nps).value),
+                "course_satisfaction": safe_float(ws.cell(row_idx, c_course_sat).value),
+                "instructor_satisfaction_avg": safe_float(ws.cell(row_idx, c_inst_avg).value),
+                "teaching_expertise": safe_float(ws.cell(row_idx, c_expertise).value),
+                "delivery_skill": safe_float(ws.cell(row_idx, c_delivery).value),
+                "practical_use": safe_float(ws.cell(row_idx, c_practical).value),
+                "textbook_quality": safe_float(ws.cell(row_idx, c_textbook).value),
                 "complaints": {
                     "정보": safe_int(ws.cell(row_idx, 15).value),
                     "절차": safe_int(ws.cell(row_idx, 16).value),
@@ -187,7 +226,7 @@ class DataManager:
                 },
                 "positions": {
                     "사원": safe_int(ws.cell(row_idx, 29).value),
-                    "대리": safe_int(row_idx, 30) if False else safe_int(ws.cell(row_idx, 30).value),
+                    "대리": safe_int(ws.cell(row_idx, 30).value),
                     "과장": safe_int(ws.cell(row_idx, 31).value),
                     "차장": safe_int(ws.cell(row_idx, 32).value),
                     "부팀장": safe_int(ws.cell(row_idx, 33).value),
@@ -206,7 +245,6 @@ class DataManager:
 
             key = f"{course_name}_{schedule_raw}_{instructor_name}"
             if key in existing_keys:
-                # 갱신
                 self.records[existing_keys[key]] = record
             else:
                 existing_keys[key] = len(self.records)

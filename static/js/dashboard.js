@@ -561,69 +561,108 @@ function initUploadModal() {
   btnOpen.addEventListener('click', () => {
     modal.classList.remove('hidden');
     statusDiv.classList.add('hidden');
+    statusDiv.innerHTML = '';
   });
 
-  const closeModal = () => modal.classList.add('hidden');
+  const closeModal = () => {
+    modal.classList.add('hidden');
+    fileInput.value = '';
+  };
   btnClose.addEventListener('click', closeModal);
   btnCancel.addEventListener('click', closeModal);
 
-  dropZone.addEventListener('click', () => fileInput.click());
-
-  dropZone.addEventListener('dragover', (e) => {
+  // 클릭 시 파일 탐색기 열기 (버블링 방지)
+  dropZone.addEventListener('click', (e) => {
     e.preventDefault();
-    dropZone.classList.add('border-emerald-600', 'bg-emerald-100/50');
+    e.stopPropagation();
+    fileInput.click();
   });
 
-  dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('border-emerald-600', 'bg-emerald-100/50');
+  // 드래그 앤 드롭 이벤트 방어
+  ['dragenter', 'dragover'].forEach(eventName => {
+    dropZone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.add('border-emerald-600', 'bg-emerald-100/60');
+    });
   });
 
-  dropZone.addEventListener('drop', (e) => {
+  ['dragleave', 'dragend'].forEach(eventName => {
+    dropZone.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('border-emerald-600', 'bg-emerald-100/60');
+    });
+  });
+
+  dropZone.addEventListener('drop', async (e) => {
     e.preventDefault();
-    dropZone.classList.remove('border-emerald-600', 'bg-emerald-100/50');
-    if (e.dataTransfer.files.length > 0) {
-      handleFileUpload(e.dataTransfer.files[0]);
+    e.stopPropagation();
+    dropZone.classList.remove('border-emerald-600', 'bg-emerald-100/60');
+
+    const dt = e.dataTransfer;
+    if (dt && dt.files && dt.files.length > 0) {
+      await handleFileUpload(dt.files[0]);
     }
   });
 
-  fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-      handleFileUpload(e.target.files[0]);
+  fileInput.addEventListener('change', async (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      await handleFileUpload(file);
+      fileInput.value = ''; // 재업로드를 위해 반드시 리셋
     }
   });
 
   async function handleFileUpload(file) {
+    if (!file) return;
+
     statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-blue-50 text-blue-700 flex items-center';
-    statusDiv.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> 파일 파싱 및 데이터 누적 중...';
+    statusDiv.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-2"></i> [${escapeHtml(file.name)}] 파싱 및 데이터 누적 중...`;
     statusDiv.classList.remove('hidden');
 
     try {
+      let importedCount = 0;
+      let totalRecords = 0;
+
       if (isServerAvailable) {
+        // 서버 모드: FastAPI /api/upload
         const formData = new FormData();
         formData.append('file', file);
         const res = await fetch('/api/upload', { method: 'POST', body: formData });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || '업로드 실패');
+
         await checkServerAndLoadData();
-      } else if (window.clientEngine) {
-        const count = await window.clientEngine.parseAndMergeExcel(file);
+        totalRecords = filterOptions.total_records || 0;
+        importedCount = data.imported_count || totalRecords;
+      } else {
+        // 브라우저 자립형 모드: ClientEngine + IndexedDB
+        if (!window.clientEngine) {
+          throw new Error('클라이언트 엔진을 찾을 수 없습니다.');
+        }
+        importedCount = await window.clientEngine.parseAndMergeExcel(file);
         filterOptions = window.clientEngine.getFilterOptions();
-        document.getElementById('recordCount').textContent = filterOptions.total_records.toLocaleString();
+        totalRecords = filterOptions.total_records;
+        document.getElementById('recordCount').textContent = totalRecords.toLocaleString();
       }
 
       statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-emerald-50 text-emerald-800 flex items-center';
-      statusDiv.innerHTML = `<i class="fa-solid fa-circle-check mr-2"></i> 로우데이터가 성공적으로 반영/누적되었습니다! (총 ${filterOptions.total_records.toLocaleString()}건)`;
+      statusDiv.innerHTML = `<i class="fa-solid fa-circle-check mr-2"></i> 성공: <b>${importedCount.toLocaleString()}건</b>의 데이터가 누적되었습니다! (총 ${totalRecords.toLocaleString()}건)`;
 
-      showToast('새 로우데이터가 대시보드에 성공적으로 반영되었습니다!');
+      showToast(`새 로우데이터가 성공적으로 반영되었습니다! (총 ${totalRecords.toLocaleString()}건)`);
 
+      // 현재 열려있는 과정이 있다면 바로 재조회
       const course = document.getElementById('courseSearchInput').value.trim();
       if (course) {
         const inst = document.getElementById('instructorSelect').value;
         fetchReport(course, currentMode === 'instructor' ? inst : null);
       }
     } catch (err) {
+      console.error('File upload error:', err);
       statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-rose-50 text-rose-700 flex items-center';
-      statusDiv.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${err.message}`;
+      statusDiv.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> 오류 발생: ${escapeHtml(err.message || '파일 처리 실패')}`;
+      showToast('엑셀 업로드 중 오류가 발생했습니다.', 'error');
     }
   }
 }
