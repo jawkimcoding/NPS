@@ -4,10 +4,11 @@ let currentReportData = null;
 let currentSheetIndex = 0;
 let currentMode = 'instructor'; // 'instructor' 또는 'course'
 let charts = {}; // Chart.js 인스턴스들 보관
+let isServerAvailable = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
   initUIEvents();
-  await loadFilterOptions();
+  await checkServerAndLoadData();
 
   // URL 파라미터 확인하거나 기본 샘플 로드
   const params = new URLSearchParams(window.location.search);
@@ -17,6 +18,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     selectSampleCourse(qCourse, qInst || '');
   }
 });
+
+// 서버 가용성 체크 및 필터 옵션 로드
+async function checkServerAndLoadData() {
+  try {
+    const res = await fetch('/api/filter-options', { method: 'GET' });
+    if (res.ok) {
+      filterOptions = await res.json();
+      isServerAvailable = true;
+    } else {
+      throw new Error('Server API not responding');
+    }
+  } catch (e) {
+    console.log('Running in Client-Side Mode (GitHub Pages / Standalone)');
+    isServerAvailable = false;
+    if (window.clientEngine) {
+      filterOptions = window.clientEngine.getFilterOptions();
+    }
+  }
+
+  document.getElementById('recordCount').textContent = (filterOptions.total_records || 0).toLocaleString();
+}
 
 // UI 이벤트 등록
 function initUIEvents() {
@@ -94,33 +116,21 @@ function switchMode(mode) {
   const paperTitle = document.getElementById('paperMainTitle');
 
   if (mode === 'instructor') {
-    tabInst.className = 'mode-tab active px-4 py-2 rounded-lg text-sm font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 transition';
-    tabCourse.className = 'mode-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition border border-transparent';
+    tabInst.className = 'mode-tab active px-3.5 py-1.5 rounded text-xs font-bold bg-[#4472C4] text-white transition';
+    tabCourse.className = 'mode-tab px-3.5 py-1.5 rounded text-xs font-medium text-slate-700 hover:bg-slate-100 transition border border-slate-300';
     instWrapper.style.display = 'block';
-    paperTitle.textContent = '교육 운영 결과 보고서 (강사별 만족도)';
+    paperTitle.textContent = '교육 운영 결과 보고서';
   } else {
-    tabCourse.className = 'mode-tab active px-4 py-2 rounded-lg text-sm font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 transition';
-    tabInst.className = 'mode-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition border border-transparent';
+    tabCourse.className = 'mode-tab active px-3.5 py-1.5 rounded text-xs font-bold bg-[#217346] text-white transition';
+    tabInst.className = 'mode-tab px-3.5 py-1.5 rounded text-xs font-medium text-slate-700 hover:bg-slate-100 transition border border-slate-300';
     instWrapper.style.display = 'none';
-    paperTitle.textContent = '교육 운영 결과 보고서 (과정 전체)';
+    paperTitle.textContent = '교육 운영 결과 보고서';
   }
 
-  // 현재 과정이 입력되어 있으면 바로 다시 조회
   const course = document.getElementById('courseSearchInput').value.trim();
   const inst = document.getElementById('instructorSelect').value;
   if (course && currentReportData) {
     fetchReport(course, currentMode === 'instructor' ? inst : null);
-  }
-}
-
-// 필터 옵션 로드
-async function loadFilterOptions() {
-  try {
-    const res = await fetch('/api/filter-options');
-    filterOptions = await res.json();
-    document.getElementById('recordCount').textContent = (filterOptions.total_records || 0).toLocaleString();
-  } catch (err) {
-    console.error('Failed to load filter options:', err);
   }
 }
 
@@ -131,15 +141,15 @@ function renderCourseDropdown(query) {
   const matched = filterOptions.courses.filter(c => c.toLowerCase().includes(q)).slice(0, 30);
 
   if (matched.length === 0) {
-    dropdown.innerHTML = '<div class="p-3 text-xs text-slate-400 text-center">일치하는 과정이 없습니다.</div>';
+    dropdown.innerHTML = '<div class="p-2.5 text-xs text-slate-400 text-center">일치하는 과정이 없습니다.</div>';
     dropdown.classList.remove('hidden');
     return;
   }
 
   dropdown.innerHTML = matched.map(c => `
-    <div class="px-4 py-2.5 text-sm hover:bg-indigo-50/70 hover:text-indigo-700 cursor-pointer font-medium text-slate-700 transition flex items-center justify-between" onclick="selectCourse('${escapeQuotes(c)}')">
+    <div class="px-3.5 py-2 text-xs hover:bg-blue-50 hover:text-[#4472C4] cursor-pointer font-medium text-slate-800 transition flex items-center justify-between" onclick="selectCourse('${escapeQuotes(c)}')">
       <span>${escapeHtml(c)}</span>
-      <span class="text-xs text-slate-400 font-normal">선택</span>
+      <span class="text-[11px] text-slate-400 font-normal">선택</span>
     </div>
   `).join('');
   dropdown.classList.remove('hidden');
@@ -162,11 +172,9 @@ function selectCourse(courseName) {
       opt.textContent = inst;
       instSelect.appendChild(opt);
     });
-    // 첫 번째 강사 자동 선택
     instSelect.value = details.instructors[0];
   }
 
-  // 자동 조회
   fetchReport(courseName, currentMode === 'instructor' ? instSelect.value : null);
 }
 
@@ -191,18 +199,25 @@ window.selectSampleCourse = function(courseName, instName) {
 async function fetchReport(courseName, instructorName) {
   showLoading(true);
   try {
-    let url = `/api/report?course_name=${encodeURIComponent(courseName)}&mode=${currentMode}`;
-    if (instructorName && currentMode === 'instructor') {
-      url += `&instructor_name=${encodeURIComponent(instructorName)}`;
+    if (isServerAvailable) {
+      let url = `/api/report?course_name=${encodeURIComponent(courseName)}&mode=${currentMode}`;
+      if (instructorName && currentMode === 'instructor') {
+        url += `&instructor_name=${encodeURIComponent(instructorName)}`;
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || '보고서 조회 실패');
+      }
+      currentReportData = await res.json();
+    } else {
+      currentReportData = window.clientEngine.getReportData(courseName, instructorName, currentMode);
+      if (currentReportData.error) {
+        throw new Error(currentReportData.error);
+      }
     }
 
-    const res = await fetch(url);
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || '보고서 조회 실패');
-    }
-
-    currentReportData = await res.json();
     currentSheetIndex = 0;
     renderRoundTabs();
     renderCurrentSheet();
@@ -226,8 +241,8 @@ function renderRoundTabs() {
 
   container.classList.remove('hidden');
   btnBox.innerHTML = currentReportData.sheets.map((s, idx) => `
-    <button onclick="switchSheet(${idx})" class="px-3 py-1.5 rounded-lg text-xs font-bold transition ${idx === currentSheetIndex ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">
-      ${escapeHtml(s.sheet_title)} (${s.display_period.split(' ~ ')[0].substring(5)})
+    <button onclick="switchSheet(${idx})" class="px-2.5 py-1 rounded text-xs font-bold transition ${idx === currentSheetIndex ? 'bg-[#4472C4] text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-300'}">
+      ${escapeHtml(s.sheet_title)}
     </button>
   `).join('');
 }
@@ -238,7 +253,7 @@ function switchSheet(idx) {
   renderCurrentSheet();
 }
 
-// 현재 선택된 차수 시트 화면 렌더링
+// 현재 선택된 차수 시트 화면 렌더링 (샘플 엑셀 서식 100% 미러링)
 function renderCurrentSheet() {
   if (!currentReportData || !currentReportData.sheets || currentReportData.sheets.length === 0) {
     document.getElementById('emptyState').classList.remove('hidden');
@@ -251,13 +266,12 @@ function renderCurrentSheet() {
 
   const sheet = currentReportData.sheets[currentSheetIndex];
 
-  // 상단 정보
+  // R4~R5: 과정명, 일정, 설문인원
   document.getElementById('viewCourseName').textContent = sheet.course_name;
   document.getElementById('viewPeriod').textContent = sheet.display_period;
-  document.getElementById('viewRespondentCount').textContent = `${sheet.respondent_count}명`;
-  document.getElementById('currentRoundBadge').textContent = `${sheet.sheet_title} 보고서`;
+  document.getElementById('viewRespondentCount').textContent = sheet.respondent_count;
 
-  // 1. 설문 결과 분석 테이블
+  // R9~R11: 1. 설문 결과 분석 테이블
   const tbody = document.getElementById('scoresTableBody');
   tbody.innerHTML = '';
 
@@ -265,71 +279,62 @@ function renderCurrentSheet() {
     const cur = inst.current;
     const cum = inst.cumulative;
     
-    // 이번 차수 행
+    // 이번 차수 행 (R10)
     const tr1 = document.createElement('tr');
     tr1.innerHTML = `
-      <td class="excel-td text-center font-bold bg-slate-50 align-middle" rowspan="2">
-        ${escapeHtml(inst.instructor_name)}
-        <div class="text-[11px] text-slate-400 font-normal mt-0.5">${inst.hours}시간</div>
+      <td class="text-center font-normal align-middle">${escapeHtml(inst.instructor_name)}</td>
+      <td class="align-middle text-[9pt] leading-tight" rowspan="2">
+        <textarea id="currInput_${iIdx}" class="w-full text-[9pt] p-1 border border-transparent hover:border-slate-300 focus:border-blue-500 rounded resize-none" rows="3" onblur="saveCurriculum('${escapeQuotes(sheet.course_name)}', '${escapeQuotes(inst.instructor_name)}', this.value)">${escapeHtml(inst.curriculum)}</textarea>
       </td>
-      <td class="excel-td align-top text-xs text-slate-700" rowspan="2">
-        <textarea id="currInput_${iIdx}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-indigo-500 rounded resize-none" rows="3" onblur="saveCurriculum('${escapeQuotes(sheet.course_name)}', '${escapeQuotes(inst.instructor_name)}', this.value)">${escapeHtml(inst.curriculum)}</textarea>
-      </td>
-      <td class="excel-td text-center font-semibold bg-indigo-50/50 text-indigo-900">이번 차수</td>
-      <td class="excel-td text-center font-bold text-slate-900">${cur.teaching_expertise.toFixed(1)}</td>
-      <td class="excel-td text-center font-bold text-slate-900">${cur.delivery_skill.toFixed(1)}</td>
-      <td class="excel-td text-center font-bold text-slate-900">${cur.practical_use.toFixed(1)}</td>
-      <td class="excel-td text-center font-bold text-slate-900">${cur.textbook_quality.toFixed(1)}</td>
+      <td class="text-center font-normal whitespace-pre-line leading-tight">이번\n차수</td>
+      <td class="text-center font-normal">${cur.teaching_expertise.toFixed(1)}</td>
+      <td class="text-center font-normal">${cur.delivery_skill.toFixed(1)}</td>
+      <td class="text-center font-normal">${cur.practical_use.toFixed(1)}</td>
+      <td class="text-center font-normal">${cur.textbook_quality.toFixed(1)}</td>
     `;
     tbody.appendChild(tr1);
 
-    // 누적 차수 행
+    // 누적 차수 행 (R11)
     const tr2 = document.createElement('tr');
     tr2.innerHTML = `
-      <td class="excel-td text-center font-semibold bg-emerald-50/50 text-emerald-900">누적 차수</td>
-      <td class="excel-td text-center font-extrabold text-emerald-700 bg-emerald-50/20">${cum.teaching_expertise.toFixed(2)}</td>
-      <td class="excel-td text-center font-extrabold text-emerald-700 bg-emerald-50/20">${cum.delivery_skill.toFixed(2)}</td>
-      <td class="excel-td text-center font-extrabold text-emerald-700 bg-emerald-50/20">${cum.practical_use.toFixed(2)}</td>
-      <td class="excel-td text-center font-extrabold text-emerald-700 bg-emerald-50/20">${cum.textbook_quality.toFixed(2)}</td>
+      <td class="text-center font-normal align-middle">${inst.hours}</td>
+      <td class="text-center font-normal whitespace-pre-line leading-tight">누적\n차수</td>
+      <td class="text-center font-normal">${cum.teaching_expertise.toFixed(2)}</td>
+      <td class="text-center font-normal">${cum.delivery_skill.toFixed(2)}</td>
+      <td class="text-center font-normal">${cum.practical_use.toFixed(2)}</td>
+      <td class="text-center font-normal">${cum.textbook_quality.toFixed(2)}</td>
     `;
     tbody.appendChild(tr2);
   });
 
-  // 6개 시각화 차트 렌더링
+  // 6개 차트 렌더링 (Office Accent1 테마 블루 색상: #4472C4)
   renderAllCharts(sheet.charts);
 
-  // 2. 이번 교육 운영 결과표 (주관식 의견)
-  const comm = sheet.comments || {};
-  const instF = comm.instructor_feedback || [];
-  const contF = comm.content_feedback || [];
-  const recF = comm.recommend_feedback || [];
-
-  for (let i = 0; i < 4; i++) {
-    document.getElementById(`commInst${i}`).value = instF[i] || '';
-    document.getElementById(`commContent${i}`).value = contF[i] || '';
-    document.getElementById(`commRec${i}`).value = recF[i] || '';
-  }
+  // R60 이후: 2. 이번 교육 운영 결과표 (주관식 후기 테이블)
+  renderCommentsSection(sheet);
 }
 
 // 6개 차트 렌더링
 function renderAllCharts(chartsData) {
-  // Chart 0: 교육과정내용 만족도 추이 (막대)
-  renderBarChart('chartSatisfactionTrend', chartsData.chart0_satisfaction_trend.categories, chartsData.chart0_satisfaction_trend.values, '만족도 (5점 만점)', '#4f46e5', 5);
+  const chartBlue = '#4472C4'; // Office 기본 테마 단색 블루
 
-  // Chart 1: 추천지수(NPS) 추이 (막대)
-  renderBarChart('chartNpsTrend', chartsData.chart1_nps_trend.categories, chartsData.chart1_nps_trend.values, 'NPS 점수', '#0ea5e9', 100);
+  // Chart 0: 교육과정내용 만족도 추이 (Full Width)
+  renderBarChart('chartSatisfactionTrend', chartsData.chart0_satisfaction_trend.categories, chartsData.chart0_satisfaction_trend.values, '만족도', chartBlue, 5);
 
-  // Chart 4: 교육생 직급 (막대)
-  renderBarChart('chartPositions', chartsData.chart4_positions.categories, chartsData.chart4_positions.values, '인원수(명)', '#8b5cf6');
+  // Chart 1: 추천지수(NPS) 추이 (Full Width)
+  renderBarChart('chartNpsTrend', chartsData.chart1_nps_trend.categories, chartsData.chart1_nps_trend.values, 'NPS', chartBlue, 100);
 
-  // Chart 3: 희망 교육형태 (막대)
-  renderBarChart('chartPreferredFormat', chartsData.chart3_preferred_format.categories, chartsData.chart3_preferred_format.values, '응답수(명)', '#10b981');
+  // Chart 4: 교육생 직급 (Half Width)
+  renderBarChart('chartPositions', chartsData.chart4_positions.categories, chartsData.chart4_positions.values, '인원', chartBlue);
 
-  // Chart 5: 과정정보 출처 (막대)
-  renderBarChart('chartMotives', chartsData.chart5_motives.categories, chartsData.chart5_motives.values, '응답수(명)', '#f59e0b');
+  // Chart 3: 희망 교육형태 (Half Width)
+  renderBarChart('chartPreferredFormat', chartsData.chart3_preferred_format.categories, chartsData.chart3_preferred_format.values, '인원', chartBlue);
 
-  // Chart 2: 교육운영 불편요소 (막대)
-  renderBarChart('chartComplaints', chartsData.chart2_complaints.categories, chartsData.chart2_complaints.values, '건수', '#ef4444');
+  // Chart 5: 과정정보 출처 (Half Width)
+  renderBarChart('chartMotives', chartsData.chart5_motives.categories, chartsData.chart5_motives.values, '인원', chartBlue);
+
+  // Chart 2: 교육운영 불편요소 (Half Width)
+  renderBarChart('chartComplaints', chartsData.chart2_complaints.categories, chartsData.chart2_complaints.values, '건수', chartBlue);
 }
 
 function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {
@@ -346,8 +351,8 @@ function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {
         label: label,
         data: data,
         backgroundColor: color,
-        borderRadius: 4,
-        maxBarThickness: 36
+        borderRadius: 0,
+        maxBarThickness: 45
       }]
     },
     options: {
@@ -365,16 +370,94 @@ function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {
         y: {
           beginAtZero: true,
           suggestedMax: maxVal,
-          grid: { color: '#f1f5f9' },
-          ticks: { font: { size: 10 } }
+          grid: { color: '#e5e7eb' },
+          ticks: { font: { size: 10, family: 'Malgun Gothic' } }
         },
         x: {
           grid: { display: false },
-          ticks: { font: { size: 10 } }
+          ticks: { font: { size: 10, family: 'Malgun Gothic' } }
         }
       }
     }
   });
+}
+
+// 주관식 후기 테이블 동적 렌더링 (강사별만족도 / 교육운영결과보고서 양식 맞춤)
+function renderCommentsSection(sheet) {
+  const tbody = document.getElementById('commentsTableBody');
+  tbody.innerHTML = '';
+
+  const comments = sheet.comments || {};
+  const isInstructorMode = (currentMode === 'instructor');
+
+  if (isInstructorMode) {
+    // 강사별 만족도 샘플 양식: 3개 섹션 + '긍정' 배지
+    const sections = [
+      { key: 'instructor_feedback', title: '  강사님 관련 의견', idPrefix: 'commInst' },
+      { key: 'content_feedback', title: '  교육 내용 관련 의견', idPrefix: 'commContent' },
+      { key: 'recommend_feedback', title: '  본 교육과정 추천 시 추천 사유', idPrefix: 'commRec' }
+    ];
+
+    sections.forEach(sec => {
+      const items = comments[sec.key] || [];
+      const rowCount = Math.max(4, items.length);
+
+      for (let i = 0; i < rowCount; i++) {
+        const tr = document.createElement('tr');
+        if (i === 0) {
+          tr.innerHTML = `
+            <td class="font-bold text-center align-middle" style="width: 25%;" rowspan="${rowCount}">${escapeHtml(sec.title)}</td>
+            <td class="text-center align-middle" style="width: 10%;"><span class="badge-positive">긍정</span></td>
+            <td style="width: 65%;">
+              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+            </td>
+          `;
+        } else {
+          tr.innerHTML = `
+            <td class="text-center align-middle"><span class="badge-positive">긍정</span></td>
+            <td>
+              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+            </td>
+          `;
+        }
+        tbody.appendChild(tr);
+      }
+    });
+
+  } else {
+    // 교육운영결과보고서 샘플 양식: 5개 섹션
+    const sections = [
+      { key: 'instructor_feedback', title: '  강사님 관련 의견', idPrefix: 'commInst', defaultCount: 2 },
+      { key: 'content_feedback', title: '  교육 내용 관련 의견', idPrefix: 'commContent', defaultCount: 1 },
+      { key: 'operation_feedback', title: '  교육 신청에서 종료까지 교육 운영 관련 의견', idPrefix: 'commOper', defaultCount: 1 },
+      { key: 'recommend_feedback', title: '  본 교육과정 추천 시 추천 사유', idPrefix: 'commRec', defaultCount: 3 },
+      { key: 'additional_courses', title: '  추가로 개설이 되었으면 하는 과정 혹은 부문', idPrefix: 'commAdd', defaultCount: 1 }
+    ];
+
+    sections.forEach(sec => {
+      const items = comments[sec.key] || [];
+      const rowCount = Math.max(sec.defaultCount, items.length);
+
+      for (let i = 0; i < rowCount; i++) {
+        const tr = document.createElement('tr');
+        if (i === 0) {
+          tr.innerHTML = `
+            <td class="font-bold align-middle pl-3" style="width: 38%;" rowspan="${rowCount}">${escapeHtml(sec.title)}</td>
+            <td style="width: 62%;">
+              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-emerald-600 rounded" placeholder="의견을 입력하세요" />
+            </td>
+          `;
+        } else {
+          tr.innerHTML = `
+            <td>
+              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-emerald-600 rounded" placeholder="의견을 입력하세요" />
+            </td>
+          `;
+        }
+        tbody.appendChild(tr);
+      }
+    });
+  }
 }
 
 // 주관식 의견 저장
@@ -382,29 +465,35 @@ async function saveCurrentComments() {
   if (!currentReportData || !currentReportData.sheets) return;
   const sheet = currentReportData.sheets[currentSheetIndex];
 
-  const instF = [0,1,2,3].map(i => document.getElementById(`commInst${i}`).value.trim()).filter(v => v);
-  const contF = [0,1,2,3].map(i => document.getElementById(`commContent${i}`).value.trim()).filter(v => v);
-  const recF = [0,1,2,3].map(i => document.getElementById(`commRec${i}`).value.trim()).filter(v => v);
+  const commentsObj = {};
+  if (currentMode === 'instructor') {
+    commentsObj.instructor_feedback = [0,1,2,3,4].map(i => document.getElementById(`commInst${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.content_feedback = [0,1,2,3,4].map(i => document.getElementById(`commContent${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.recommend_feedback = [0,1,2,3,4].map(i => document.getElementById(`commRec${i}`)?.value?.trim()).filter(Boolean);
+  } else {
+    commentsObj.instructor_feedback = [0,1,2,3].map(i => document.getElementById(`commInst${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.content_feedback = [0,1,2,3].map(i => document.getElementById(`commContent${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.operation_feedback = [0,1,2,3].map(i => document.getElementById(`commOper${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.recommend_feedback = [0,1,2,3].map(i => document.getElementById(`commRec${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.additional_courses = [0,1,2,3].map(i => document.getElementById(`commAdd${i}`)?.value?.trim()).filter(Boolean);
+  }
 
   try {
-    const res = await fetch('/api/comments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        comment_key: sheet.comment_key,
-        instructor_feedback: instF,
-        content_feedback: contF,
-        recommend_feedback: recF
-      })
-    });
-    if (!res.ok) throw new Error('저장 실패');
+    if (isServerAvailable) {
+      const res = await fetch('/api/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          comment_key: sheet.comment_key,
+          ...commentsObj
+        })
+      });
+      if (!res.ok) throw new Error('저장 실패');
+    } else if (window.clientEngine) {
+      window.clientEngine.saveComments(sheet.comment_key, commentsObj);
+    }
     
-    // 로컬 상태 동기화
-    sheet.comments = {
-      instructor_feedback: instF,
-      content_feedback: contF,
-      recommend_feedback: recF
-    };
+    sheet.comments = commentsObj;
     showToast('주관식 의견이 성공적으로 저장되었습니다!');
   } catch (err) {
     showToast('주관식 의견 저장 중 오류가 발생했습니다.', 'error');
@@ -414,33 +503,49 @@ async function saveCurrentComments() {
 // 커리큘럼 자동 저장
 async function saveCurriculum(courseName, instructorName, text) {
   try {
-    await fetch('/api/curriculum', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        course_name: courseName,
-        instructor_name: instructorName,
-        curriculum_text: text
-      })
-    });
+    if (isServerAvailable) {
+      await fetch('/api/curriculum', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_name: courseName,
+          instructor_name: instructorName,
+          curriculum_text: text
+        })
+      });
+    } else if (window.clientEngine) {
+      window.clientEngine.saveCurriculum(courseName, instructorName, text);
+    }
   } catch (err) {
     console.error('Failed to auto-save curriculum:', err);
   }
 }
 
 // 엑셀 다운로드
-function downloadExcel() {
+async function downloadExcel() {
   if (!currentReportData) {
     showToast('먼저 과정을 선택해 주세요.', 'error');
     return;
   }
-  const course = document.getElementById('courseSearchInput').value.trim();
-  const inst = document.getElementById('instructorSelect').value;
-  let url = `/api/download-excel?course_name=${encodeURIComponent(course)}&mode=${currentMode}`;
-  if (currentMode === 'instructor' && inst) {
-    url += `&instructor_name=${encodeURIComponent(inst)}`;
+  
+  if (isServerAvailable) {
+    const course = document.getElementById('courseSearchInput').value.trim();
+    const inst = document.getElementById('instructorSelect').value;
+    let url = `/api/download-excel?course_name=${encodeURIComponent(course)}&mode=${currentMode}`;
+    if (currentMode === 'instructor' && inst) {
+      url += `&instructor_name=${encodeURIComponent(inst)}`;
+    }
+    window.location.href = url;
+  } else if (window.clientEngine) {
+    showToast('엑셀 보고서를 생성하는 중입니다...');
+    try {
+      await window.clientEngine.downloadExcel(currentReportData);
+      showToast('엑셀 보고서 다운로드 완료!');
+    } catch (err) {
+      console.error(err);
+      showToast('엑셀 생성 중 오류가 발생했습니다.', 'error');
+    }
   }
-  window.location.href = url;
 }
 
 // 업로드 모달 제어
@@ -466,58 +571,58 @@ function initUploadModal() {
 
   dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
-    dropZone.classList.add('border-indigo-600', 'bg-indigo-100/50');
+    dropZone.classList.add('border-emerald-600', 'bg-emerald-100/50');
   });
 
   dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('border-indigo-600', 'bg-indigo-100/50');
+    dropZone.classList.remove('border-emerald-600', 'bg-emerald-100/50');
   });
 
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
-    dropZone.classList.remove('border-indigo-600', 'bg-indigo-100/50');
+    dropZone.classList.remove('border-emerald-600', 'bg-emerald-100/50');
     if (e.dataTransfer.files.length > 0) {
-      uploadFile(e.dataTransfer.files[0]);
+      handleFileUpload(e.dataTransfer.files[0]);
     }
   });
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      uploadFile(e.target.files[0]);
+      handleFileUpload(e.target.files[0]);
     }
   });
 
-  async function uploadFile(file) {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    statusDiv.className = 'text-xs p-3 rounded-lg font-medium bg-indigo-50 text-indigo-700 flex items-center';
-    statusDiv.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> 파일 업로드 및 데이터 병합 중...';
+  async function handleFileUpload(file) {
+    statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-blue-50 text-blue-700 flex items-center';
+    statusDiv.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> 파일 파싱 및 데이터 누적 중...';
     statusDiv.classList.remove('hidden');
 
     try {
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || '업로드 실패');
+      if (isServerAvailable) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '업로드 실패');
+        await checkServerAndLoadData();
+      } else if (window.clientEngine) {
+        const count = await window.clientEngine.parseAndMergeExcel(file);
+        filterOptions = window.clientEngine.getFilterOptions();
+        document.getElementById('recordCount').textContent = filterOptions.total_records.toLocaleString();
+      }
 
-      statusDiv.className = 'text-xs p-3 rounded-lg font-medium bg-emerald-50 text-emerald-700 flex items-center';
-      statusDiv.innerHTML = `<i class="fa-solid fa-circle-check mr-2"></i> ${data.message} (총 ${data.total_records.toLocaleString()}건)`;
+      statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-emerald-50 text-emerald-800 flex items-center';
+      statusDiv.innerHTML = `<i class="fa-solid fa-circle-check mr-2"></i> 로우데이터가 성공적으로 반영/누적되었습니다! (총 ${filterOptions.total_records.toLocaleString()}건)`;
 
-      // 필터 옵션 새로고침
-      await loadFilterOptions();
       showToast('새 로우데이터가 대시보드에 성공적으로 반영되었습니다!');
 
-      // 현재 보고서가 열려있다면 새로고침
       const course = document.getElementById('courseSearchInput').value.trim();
       if (course) {
         const inst = document.getElementById('instructorSelect').value;
         fetchReport(course, currentMode === 'instructor' ? inst : null);
       }
     } catch (err) {
-      statusDiv.className = 'text-xs p-3 rounded-lg font-medium bg-rose-50 text-rose-700 flex items-center';
+      statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-rose-50 text-rose-700 flex items-center';
       statusDiv.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-2"></i> ${err.message}`;
     }
   }
@@ -540,9 +645,9 @@ function showToast(msg, type = 'success') {
 
   text.textContent = msg;
   if (type === 'error') {
-    icon.className = 'fa-solid fa-circle-xmark text-rose-400 text-base';
+    icon.className = 'fa-solid fa-circle-xmark text-rose-400';
   } else {
-    icon.className = 'fa-solid fa-circle-check text-emerald-400 text-base';
+    icon.className = 'fa-solid fa-circle-check text-emerald-400';
   }
 
   toast.classList.remove('translate-y-20', 'opacity-0');

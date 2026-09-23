@@ -38,7 +38,7 @@ class ExcelGenerator:
 
     def generate(self, report_data: Dict[str, Any]) -> io.BytesIO:
         """
-        report_data를 바탕으로 원본 서식을 복제한 엑셀 파일 생성
+        report_data를 바탕으로 원본 서식을 100% 동일하게 복제한 엑셀 파일 생성
         """
         mode = report_data.get("mode", "instructor")
         template_path = TEMPLATE_INSTRUCTOR if mode == "instructor" else TEMPLATE_COURSE
@@ -55,7 +55,7 @@ class ExcelGenerator:
             out.seek(0)
             return out
 
-        # 원본 시트들 중 첫 번째 시트를 베이스 템플릿으로 저장하고 나머지 기존 시트 삭제
+        # 원본 시트들 중 첫 번째 시트를 베이스 템플릿으로 저장
         base_sheet = wb[wb.sheetnames[0]]
         base_charts = [copy.deepcopy(c) for c in base_sheet._charts]
 
@@ -67,7 +67,6 @@ class ExcelGenerator:
 
         for idx, sdata in enumerate(sheets_data):
             sheet_title = sdata.get("sheet_title", f"{idx+1}차")
-            # 시트명 특수문자 제거 및 31자 제한
             clean_title = sheet_title.replace("/", "_").replace("\\", "_").replace("?", "_").replace("*", "_").replace(":", "_").replace("[", "_").replace("]", "_")[:30]
 
             if idx == 0:
@@ -142,22 +141,36 @@ class ExcelGenerator:
 
             # 4. 주관식 후기 반영 (R61 이후)
             comments = sdata.get("comments", {})
-            inst_feedbacks = comments.get("instructor_feedback", [])
-            content_feedbacks = comments.get("content_feedback", [])
-            rec_feedbacks = comments.get("recommend_feedback", [])
 
-            # 기존 템플릿의 R61-64 (강사), R65-68 (내용), R69-72 (추천) 채우기
-            for i in range(4):
-                val = inst_feedbacks[i] if i < len(inst_feedbacks) else ""
-                ws.cell(61 + i, 5).value = val
-                
-            for i in range(4):
-                val = content_feedbacks[i] if i < len(content_feedbacks) else ""
-                ws.cell(65 + i, 5).value = val
+            if mode == "instructor":
+                # 강사별 만족도 템플릿: 3개 섹션
+                inst_feedbacks = comments.get("instructor_feedback", [])
+                content_feedbacks = comments.get("content_feedback", [])
+                rec_feedbacks = comments.get("recommend_feedback", [])
 
-            for i in range(4):
-                val = rec_feedbacks[i] if i < len(rec_feedbacks) else ""
-                ws.cell(69 + i, 5).value = val
+                for i in range(4):
+                    ws.cell(61 + i, 5).value = inst_feedbacks[i] if i < len(inst_feedbacks) else ""
+                for i in range(4):
+                    ws.cell(65 + i, 5).value = content_feedbacks[i] if i < len(content_feedbacks) else ""
+                for i in range(4):
+                    ws.cell(69 + i, 5).value = rec_feedbacks[i] if i < len(rec_feedbacks) else ""
+
+            else:
+                # 교육운영결과보고서 템플릿: 5개 섹션
+                inst_feedbacks = comments.get("instructor_feedback", [])
+                content_feedbacks = comments.get("content_feedback", [])
+                oper_feedbacks = comments.get("operation_feedback", [])
+                rec_feedbacks = comments.get("recommend_feedback", [])
+                add_feedbacks = comments.get("additional_courses", [])
+
+                ws.cell(61, 5).value = inst_feedbacks[0] if len(inst_feedbacks) > 0 else ""
+                ws.cell(62, 5).value = inst_feedbacks[1] if len(inst_feedbacks) > 1 else ""
+                ws.cell(63, 5).value = content_feedbacks[0] if len(content_feedbacks) > 0 else ""
+                ws.cell(64, 5).value = oper_feedbacks[0] if len(oper_feedbacks) > 0 else ""
+                ws.cell(65, 5).value = rec_feedbacks[0] if len(rec_feedbacks) > 0 else ""
+                ws.cell(66, 5).value = rec_feedbacks[1] if len(rec_feedbacks) > 1 else ""
+                ws.cell(67, 5).value = rec_feedbacks[2] if len(rec_feedbacks) > 2 else ""
+                ws.cell(68, 5).value = add_feedbacks[0] if len(add_feedbacks) > 0 else ""
 
         out = io.BytesIO()
         wb.save(out)
