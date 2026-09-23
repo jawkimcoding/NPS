@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+venv/
+*.tmp
+uploads/*
+!uploads/.gitkeep
+test_*.xlsx
+.DS_Store

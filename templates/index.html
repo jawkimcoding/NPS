@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPC 만족도 및 교육운영결과보고서 대시보드</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- FontAwesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <!-- Google Fonts (Noto Sans KR) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      background-color: #f1f5f9;
+    }
+    .report-card {
+      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.08), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
+    }
+    .excel-th {
+      background-color: #f8fafc;
+      border: 1px solid #cbd5e1;
+      padding: 8px 12px;
+      font-weight: 600;
+      font-size: 0.875rem;
+      text-align: center;
+      color: #334155;
+    }
+    .excel-td {
+      border: 1px solid #e2e8f0;
+      padding: 8px 12px;
+      font-size: 0.875rem;
+      color: #1e293b;
+    }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white; }
+      .report-card { box-shadow: none; border: none; }
+    }
+  </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+  <!-- 상단 네비게이션 헤더 -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-40 no-print">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-md">
+          <i class="fa-solid fa-chart-line text-lg"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-slate-900 leading-tight">KPC 만족도 & 교육운영결과 분석 대시보드</h1>
+          <p class="text-xs text-slate-500">누적 로우데이터 자동 분석 및 동일 양식 엑셀 보고서 생성</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <span id="totalRecordsBadge" class="hidden sm:inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <i class="fa-solid fa-database mr-1.5"></i> 로우데이터 <span id="recordCount" class="ml-1 font-bold">0</span>건
+        </span>
+
+        <!-- 업로드 모달 열기 버튼 -->
+        <button id="btnOpenUpload" class="inline-flex items-center px-3.5 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 transition shadow-sm">
+          <i class="fa-solid fa-cloud-arrow-up mr-2 text-indigo-600"></i> 로우데이터 업로드
+        </button>
+
+        <!-- 엑셀 다운로드 버튼 -->
+        <button id="btnDownloadExcel" class="inline-flex items-center px-4 py-2 border border-transparent rounded-lg text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition shadow-sm disabled:opacity-50">
+          <i class="fa-solid fa-file-excel mr-2 text-emerald-200 text-base"></i> 엑셀 보고서 다운로드
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 메인 컨테이너 -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    
+    <!-- 컨트롤 & 필터 패널 (no-print) -->
+    <section class="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4 no-print">
+      <!-- 1. 보고서 모드 선택 (탭 형태) -->
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3 flex-wrap gap-3">
+        <div class="flex space-x-2">
+          <button id="tabInstructorMode" class="mode-tab active px-4 py-2 rounded-lg text-sm font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 transition">
+            <i class="fa-solid fa-chalkboard-user mr-1.5"></i> 강사별 만족도 보고서
+          </button>
+          <button id="tabCourseMode" class="mode-tab px-4 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100 transition border border-transparent">
+            <i class="fa-solid fa-file-invoice mr-1.5"></i> 교육운영 결과보고서 (과정 전체)
+          </button>
+        </div>
+        <span class="text-xs text-slate-400">
+          <i class="fa-solid fa-circle-info mr-1"></i> 과정명 및 강사를 선택하면 월별 차수 데이터가 자동 생성됩니다.
+        </span>
+      </div>
+
+      <!-- 2. 검색 및 필터 입력란 -->
+      <div class="grid grid-cols-1 md:grid-cols-12 gap-4">
+        <!-- 과정명 검색 -->
+        <div class="md:col-span-6 relative">
+          <label class="block text-xs font-semibold text-slate-600 mb-1">
+            <i class="fa-solid fa-magnifying-glass mr-1 text-indigo-500"></i> 과정명 검색 / 선택
+          </label>
+          <div class="relative">
+            <input type="text" id="courseSearchInput" placeholder="과정명을 입력하세요 (예: New Media, 마케팅, 영업...)"
+              class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm font-medium text-slate-800 placeholder-slate-400 bg-white" />
+            <button id="btnClearSearch" class="hidden absolute right-3 top-2.5 text-slate-400 hover:text-slate-600">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <!-- 자동완성 드롭다운 -->
+          <div id="courseDropdown" class="hidden absolute z-50 left-0 right-0 mt-1 max-h-60 overflow-y-auto bg-white rounded-lg border border-slate-200 shadow-xl divide-y divide-slate-100">
+            <!-- 동적 주입 -->
+          </div>
+        </div>
+
+        <!-- 강사명 필터 -->
+        <div class="md:col-span-4" id="instructorFilterWrapper">
+          <label class="block text-xs font-semibold text-slate-600 mb-1">
+            <i class="fa-solid fa-user-tie mr-1 text-indigo-500"></i> 강사명
+          </label>
+          <select id="instructorSelect" class="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm font-medium text-slate-800 bg-white">
+            <option value="">강사를 선택하세요</option>
+          </select>
+        </div>
+
+        <!-- 조회 버튼 -->
+        <div class="md:col-span-2 flex items-end">
+          <button id="btnSearch" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold shadow transition flex items-center justify-center">
+            <i class="fa-solid fa-filter mr-2"></i> 조회하기
+          </button>
+        </div>
+      </div>
+
+      <!-- 3. 월별 / 차수 탭 네비게이션 -->
+      <div id="roundTabContainer" class="hidden pt-2 border-t border-slate-100 flex items-center space-x-2 overflow-x-auto">
+        <span class="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2 whitespace-nowrap">차수 선택:</span>
+        <div id="roundTabButtons" class="flex space-x-2">
+          <!-- 동적 탭 버튼들 -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 로딩 스피너 -->
+    <div id="loadingIndicator" class="hidden py-16 flex flex-col items-center justify-center space-y-3">
+      <div class="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+      <p class="text-sm font-medium text-slate-500">보고서 데이터를 계산하고 차트를 렌더링하고 있습니다...</p>
+    </div>
+
+    <!-- 초기 안내 화면 -->
+    <div id="emptyState" class="bg-white rounded-xl border border-dashed border-slate-300 p-12 text-center space-y-4">
+      <div class="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl mx-auto flex items-center justify-center text-2xl shadow-inner">
+        <i class="fa-solid fa-folder-open"></i>
+      </div>
+      <div>
+        <h3 class="text-base font-bold text-slate-800">조회할 과정 또는 강사를 검색해 주세요</h3>
+        <p class="text-sm text-slate-500 mt-1 max-w-md mx-auto">
+          상단 검색창에서 과정명을 검색하면 로우데이터에 기록된 차수별 만족도와 교육운영결과보고서가 실물 서식 그대로 표시됩니다.
+        </p>
+      </div>
+      <div class="pt-2 flex justify-center gap-3">
+        <button onclick="selectSampleCourse('[ChatGPT 활용] New Media 마케팅 전략', '이상종')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 transition">
+          📌 샘플 1: New Media 마케팅 전략 (이상종)
+        </button>
+        <button onclick="selectSampleCourse('영업관리입문(영업지원부서대상)(생성형 AI활용)', '')" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition">
+          📌 샘플 2: 영업관리입문 (전체 과정)
+        </button>
+      </div>
+    </div>
+
+    <!-- 실제 보고서 출력 영역 (엑셀 서식 100% 미러링) -->
+    <article id="reportPaper" class="hidden bg-white rounded-xl border border-slate-200 report-card p-8 md:p-12 space-y-8">
+      
+      <!-- 보고서 대제목 헤더 -->
+      <div class="border-b-2 border-slate-900 pb-4 flex items-center justify-between">
+        <div>
+          <h2 class="text-2xl font-black text-slate-900 tracking-tight" id="paperMainTitle">교육 운영 결과 보고서</h2>
+          <p class="text-xs text-slate-500 mt-0.5" id="paperSubInfo">KPC 교육훈련 및 만족도 종합 분석 리포트</p>
+        </div>
+        <div class="text-right">
+          <span class="inline-flex items-center px-3 py-1 rounded bg-slate-100 text-slate-700 text-xs font-bold border border-slate-300" id="currentRoundBadge">
+            3월 차수
+          </span>
+        </div>
+      </div>
+
+      <!-- 상단 개요 표 (과정명, 일정, 설문인원) -->
+      <div class="overflow-x-auto">
+        <table class="w-full border-collapse">
+          <thead>
+            <tr>
+              <th class="excel-th w-3/5 text-left pl-4">과정명</th>
+              <th class="excel-th w-1/4">일정</th>
+              <th class="excel-th w-1/6">설문인원</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="excel-td font-bold text-slate-900 text-base pl-4" id="viewCourseName">-</td>
+              <td class="excel-td text-center font-medium" id="viewPeriod">-</td>
+              <td class="excel-td text-center font-bold text-indigo-700 text-base" id="viewRespondentCount">-</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 1. 설문 결과 분석 섹션 -->
+      <section class="space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-base font-bold text-slate-900 flex items-center">
+            <span class="w-2 h-5 bg-indigo-600 rounded mr-2 inline-block"></span>
+            1. 설문 결과 분석
+          </h3>
+          <span class="text-xs text-slate-500 font-semibold">① 설문결과 / 5점 만점</span>
+        </div>
+
+        <!-- 강사별 이번 차수 및 누적 차수 비교 테이블 -->
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse" id="scoresTable">
+            <thead>
+              <tr>
+                <th class="excel-th w-28">강사</th>
+                <th class="excel-th">커리큘럼</th>
+                <th class="excel-th w-24">구분</th>
+                <th class="excel-th w-24">강의내용</th>
+                <th class="excel-th w-24">전달능력</th>
+                <th class="excel-th w-24">실무활용도</th>
+                <th class="excel-th w-24">교재완성도</th>
+              </tr>
+            </thead>
+            <tbody id="scoresTableBody">
+              <!-- JS 동적 렌더링 -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 6개 핵심 차트 시각화 그리드 -->
+      <section class="space-y-4 pt-2">
+        <h4 class="text-sm font-bold text-slate-700 flex items-center">
+          <i class="fa-solid fa-chart-simple mr-2 text-indigo-600"></i> 만족도 및 통계 분석 차트
+        </h4>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Chart 0: 교육과정내용 만족도 추이 -->
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 shadow-sm">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+              <span class="text-xs font-bold text-slate-800">② 교육과정내용 만족도 / 5점</span>
+              <span class="text-[11px] text-slate-400">차수별 누적 추이</span>
+            </div>
+            <div class="h-56 relative">
+              <canvas id="chartSatisfactionTrend"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 1: 추천지수(NPS) 추이 -->
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 shadow-sm">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+              <span class="text-xs font-bold text-slate-800">③ 추천지수 (NPS)</span>
+              <span class="text-[11px] text-slate-400">차수별 누적 추이</span>
+            </div>
+            <div class="h-56 relative">
+              <canvas id="chartNpsTrend"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 4: 교육생 직급 -->
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 shadow-sm">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+              <span class="text-xs font-bold text-slate-800">④ 교육생 직급</span>
+              <span class="text-[11px] text-slate-400">응답 인원 분포</span>
+            </div>
+            <div class="h-56 relative">
+              <canvas id="chartPositions"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 3: 희망 교육형태 -->
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 shadow-sm">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+              <span class="text-xs font-bold text-slate-800">⑤ 희망 교육형태</span>
+              <span class="text-[11px] text-slate-400">선호 교육방식</span>
+            </div>
+            <div class="h-56 relative">
+              <canvas id="chartPreferredFormat"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 5: 과정정보 출처 -->
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 shadow-sm">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+              <span class="text-xs font-bold text-slate-800">⑥ 과정정보 출처 (수강동기)</span>
+              <span class="text-[11px] text-slate-400">유입 채널</span>
+            </div>
+            <div class="h-56 relative">
+              <canvas id="chartMotives"></canvas>
+            </div>
+          </div>
+
+          <!-- Chart 2: 교육운영 불편요소 -->
+          <div class="border border-slate-200 rounded-lg p-4 bg-slate-50/50 shadow-sm">
+            <div class="flex items-center justify-between mb-3 border-b border-slate-200 pb-2">
+              <span class="text-xs font-bold text-slate-800">⑦ 교육운영 불편요소</span>
+              <span class="text-[11px] text-slate-400">불편 접수 항목</span>
+            </div>
+            <div class="h-56 relative">
+              <canvas id="chartComplaints"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. 이번 교육 운영 결과표 (주관식 후기 편집란) -->
+      <section class="space-y-4 pt-4 border-t border-slate-200">
+        <div class="flex items-center justify-between">
+          <h3 class="text-base font-bold text-slate-900 flex items-center">
+            <span class="w-2 h-5 bg-indigo-600 rounded mr-2 inline-block"></span>
+            2. 이번 교육 운영 결과표
+          </h3>
+          <button id="btnSaveComments" class="no-print inline-flex items-center px-3.5 py-1.5 rounded-lg text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition shadow-sm">
+            <i class="fa-solid fa-floppy-disk mr-1.5"></i> 주관식 의견 저장
+          </button>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse">
+            <thead>
+              <tr>
+                <th class="excel-th w-1/4 text-center">구분</th>
+                <th class="excel-th w-20 text-center">성향</th>
+                <th class="excel-th text-left pl-4">의견 내용 (수정 및 추가 가능)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- 강사 관련 의견 -->
+              <tr>
+                <td class="excel-td font-bold bg-slate-50 text-slate-800 align-top text-center" rowspan="4">
+                  강사님 관련 의견
+                </td>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commInst0" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commInst1" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commInst2" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commInst3" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+
+              <!-- 교육 내용 관련 의견 -->
+              <tr>
+                <td class="excel-td font-bold bg-slate-50 text-slate-800 align-top text-center" rowspan="4">
+                  교육 내용 관련 의견
+                </td>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commContent0" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commContent1" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commContent2" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commContent3" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+
+              <!-- 본 교육과정 추천 사유 -->
+              <tr>
+                <td class="excel-td font-bold bg-slate-50 text-slate-800 align-top text-center" rowspan="4">
+                  본 교육과정 추천 시 추천 사유
+                </td>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commRec0" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commRec1" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commRec2" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+              <tr>
+                <td class="excel-td text-center font-semibold text-emerald-700 bg-emerald-50/50">긍정</td>
+                <td class="excel-td p-1.5"><input type="text" id="commRec3" class="w-full px-2 py-1 text-sm border-0 focus:ring-1 focus:ring-indigo-500 rounded" placeholder="의견을 입력하세요" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </article>
+  </main>
+
+  <!-- 로우데이터 업로드 모달 (no-print) -->
+  <div id="uploadModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <h3 class="text-base font-bold text-slate-900 flex items-center">
+          <i class="fa-solid fa-cloud-arrow-up text-indigo-600 mr-2"></i> 로우데이터 엑셀 업로드
+        </h3>
+        <button id="btnCloseUploadModal" class="text-slate-400 hover:text-slate-600">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <p class="text-xs text-slate-500">
+        LMS에서 다운로드한 <b>과정별설문결과_*.xlsx</b> 엑셀 파일을 업로드해 주세요. 기존 데이터와 자동으로 병합 및 누적되어 즉시 대시보드에 반영됩니다.
+      </p>
+
+      <!-- 드래그앤드롭 영역 -->
+      <div id="dropZone" class="border-2 border-dashed border-indigo-200 hover:border-indigo-500 bg-indigo-50/30 hover:bg-indigo-50/60 rounded-xl p-8 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3">
+        <div class="w-12 h-12 bg-white rounded-full flex items-center justify-center text-indigo-600 shadow-sm border border-indigo-100 text-xl">
+          <i class="fa-solid fa-file-excel"></i>
+        </div>
+        <div>
+          <p class="text-sm font-bold text-slate-800">클릭하거나 엑셀 파일을 여기로 끌어다 놓으세요</p>
+          <p class="text-xs text-slate-400 mt-1">지원 형식: .xlsx, .xls</p>
+        </div>
+        <input type="file" id="fileInput" accept=".xlsx, .xls" class="hidden" />
+      </div>
+
+      <div id="uploadStatus" class="hidden text-xs p-3 rounded-lg font-medium"></div>
+
+      <div class="flex justify-end space-x-2 pt-2">
+        <button id="btnCancelUpload" class="px-4 py-2 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100 border border-slate-200">
+          닫기
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 토스트 알림 메시지 -->
+  <div id="toastMessage" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition duration-300 pointer-events-none bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center space-x-3 text-sm font-medium">
+    <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-400 text-base"></i>
+    <span id="toastText">저장되었습니다.</span>
+  </div>
+
+  <!-- 대시보드 핵심 동작 자바스크립트 -->
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
