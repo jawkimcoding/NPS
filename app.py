@@ -16,15 +16,21 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+TEMPLATES_EXCEL_DIR = os.path.join(BASE_DIR, "templates_excel")
 
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(TEMPLATES_EXCEL_DIR, exist_ok=True)
 
 app = FastAPI(title="KPC 만족도 및 교육운영결과보고서 대시보드")
 
 # 정적 파일 마운트
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/data", StaticFiles(directory=DATA_DIR), name="data")
+app.mount("/templates_excel", StaticFiles(directory=TEMPLATES_EXCEL_DIR), name="templates_excel")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 

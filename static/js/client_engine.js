@@ -477,10 +477,331 @@ class ClientEngine {
     return { start_date: '', end_date: '', month: 0, round_name: '', display_period: s };
   }
 
-  // ExcelJS로 원본 양식 엑셀 파일 브라우저 생성 및 다운로드
+  // Base64 to ArrayBuffer 헬퍼
+  base64ToArrayBuffer(base64) {
+    const binaryString = window.atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  escapeXml(s) {
+    return String(s != null ? s : '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  updateChartXml(xmlContent, categories, values, isRef = false, isFloat = false) {
+    // Categories (X축)
+    const ptsCat = (categories || []).map((c, i) => `<c:pt idx="${i}"><c:v>${this.escapeXml(c)}</c:v></c:pt>`).join('');
+    if (isRef) {
+      const newCat = `<c:strCache><c:ptCount val="${categories.length}"/>${ptsCat}</c:strCache>`;
+      xmlContent = xmlContent.replace(/(<c:f>.*?<\/c:f>)\s*<c:strCache>.*?<\/c:strCache>/s, `$1${newCat}`);
+      xmlContent = xmlContent.replace(/(<c16:filteredLitCache>)\s*<c:strCache>.*?<\/c:strCache>/s, `$1${newCat}`);
+    } else {
+      const newCat = `<c:strLit><c:ptCount val="${categories.length}"/>${ptsCat}</c:strLit>`;
+      xmlContent = xmlContent.replace(/<c:strLit>.*?<\/c:strLit>/s, newCat);
+    }
+
+    // Values (Y축 수치)
+    let ptsVal;
+    let fmt;
+    if (isFloat) {
+      ptsVal = (values || []).map((v, i) => `<c:pt idx="${i}"><c:v>${Number(v).toFixed(1)}</c:v></c:pt>`).join('');
+      fmt = "0.0";
+    } else {
+      ptsVal = (values || []).map((v, i) => `<c:pt idx="${i}"><c:v>${Math.round(Number(v))}</c:v></c:pt>`).join('');
+      fmt = "General";
+    }
+
+    if (isRef) {
+      const newVal = `<c:numCache><c:formatCode>${fmt}</c:formatCode><c:ptCount val="${values.length}"/>${ptsVal}</c:numCache>`;
+      xmlContent = xmlContent.replace(/(<c:f>.*?<\/c:f>)\s*<c:numCache>.*?<\/c:numCache>/s, `$1${newVal}`);
+      xmlContent = xmlContent.replace(/(<c16:filteredLitCache>)\s*<c:numCache>.*?<\/c:numCache>/s, `$1${newVal}`);
+    } else {
+      const newVal = `<c:numLit><c:formatCode>${fmt}</c:formatCode><c:ptCount val="${values.length}"/>${ptsVal}</c:numLit>`;
+      xmlContent = xmlContent.replace(/<c:numLit>.*?<\/c:numLit>/s, newVal);
+    }
+
+    return xmlContent;
+  }
+
+  setCellValue(sheetXml, coord, value, isString = false) {
+    const pattern = new RegExp(`(<c\\s+r="${coord}"[^>]*>)(.*?)(</c>)`, 's');
+    const m = sheetXml.match(pattern);
+
+    if (isString) {
+      const valStr = this.escapeXml(value);
+      const newContent = `<is><t>${valStr}</t></is>`;
+      if (m) {
+        let openTag = m[1].replace(/\s+t="[^"]*"/, '');
+        openTag = openTag.slice(0, -1) + ' t="inlineStr">';
+        return sheetXml.slice(0, m.index) + openTag + newContent + m[3] + sheetXml.slice(m.index + m[0].length);
+      } else {
+        const rowNum = coord.match(/\d+/)[0];
+        const rowPattern = new RegExp(`(<row\\s+r="${rowNum}"[^>]*>)`, 's');
+        const rm = sheetXml.match(rowPattern);
+        if (rm) {
+          const cellXml = `<c r="${coord}" t="inlineStr">${newContent}</c>`;
+          const idx = rm.index + rm[0].length;
+          return sheetXml.slice(0, idx) + cellXml + sheetXml.slice(idx);
+        }
+      }
+    } else {
+      let valNum;
+      if (typeof value === 'number') {
+        valNum = String(Number(value.toFixed(2)));
+      } else {
+        valNum = String(value != null ? value : '0');
+      }
+      const newContent = `<v>${valNum}</v>`;
+      if (m) {
+        let openTag = m[1].replace(/\s+t="[^"]*"/, '');
+        return sheetXml.slice(0, m.index) + openTag + newContent + m[3] + sheetXml.slice(m.index + m[0].length);
+      } else {
+        const rowNum = coord.match(/\d+/)[0];
+        const rowPattern = new RegExp(`(<row\\s+r="${rowNum}"[^>]*>)`, 's');
+        const rm = sheetXml.match(rowPattern);
+        if (rm) {
+          const cellXml = `<c r="${coord}">${newContent}</c>`;
+          const idx = rm.index + rm[0].length;
+          return sheetXml.slice(0, idx) + cellXml + sheetXml.slice(idx);
+        }
+      }
+    }
+
+    return sheetXml;
+  }
+
+  // 원본 샘플 양식 및 6개 차트를 100% 무손실 복제하여 엑셀 생성 및 다운로드
   async downloadExcel(reportData) {
+    const mode = reportData.mode || 'instructor';
+
+    // 1. JSZip 기반 무손실 템플릿 엔진 시도
+    if (window.JSZip) {
+      try {
+        let templateBuffer = null;
+
+        // Base64 내장 템플릿 사용 (CORS 및 로컬 파일 완벽 지원)
+        if (window.EXCEL_TEMPLATES) {
+          const b64 = mode === 'instructor' ? window.EXCEL_TEMPLATES.instructor : window.EXCEL_TEMPLATES.course;
+          if (b64) {
+            templateBuffer = this.base64ToArrayBuffer(b64);
+          }
+        }
+
+        // fetch 백업 시도
+        if (!templateBuffer) {
+          const path = mode === 'instructor' ? './templates_excel/template_instructor.xlsx' : './templates_excel/template_course.xlsx';
+          try {
+            const resp = await fetch(path);
+            if (resp.ok) {
+              templateBuffer = await resp.arrayBuffer();
+            }
+          } catch (e) {
+            console.warn('Failed to fetch template:', e);
+          }
+        }
+
+        if (templateBuffer) {
+          const zip = await JSZip.loadAsync(templateBuffer);
+
+          // 1번 시트 원형 추출
+          const baseSheetXml = await zip.file('xl/worksheets/sheet1.xml').async('string');
+          const baseSheetRels = await zip.file('xl/worksheets/_rels/sheet1.xml.rels').async('string');
+          const baseDrawingXml = await zip.file('xl/drawings/drawing1.xml').async('string');
+          const baseDrawingRels = await zip.file('xl/drawings/_rels/drawing1.xml.rels').async('string');
+
+          const baseChartsXml = [];
+          for (let c = 1; c <= 6; c++) {
+            baseChartsXml.push(await zip.file(`xl/charts/chart${c}.xml`).async('string'));
+          }
+
+          // 기존 시트/드로잉/차트 파일 정리
+          const removeKeys = [];
+          zip.forEach((path) => {
+            if (path.startsWith('xl/worksheets/') || path.startsWith('xl/drawings/') || path.startsWith('xl/charts/')) {
+              removeKeys.push(path);
+            }
+          });
+          removeKeys.forEach(k => zip.remove(k));
+
+          const sheets = reportData.sheets || [];
+          const sheetEntries = [];
+          const wbRelsEntries = [];
+          const usedTitles = new Set();
+
+          sheets.forEach((sdata, sIdx) => {
+            const sheetNum = sIdx + 1;
+            const drawingNum = sIdx + 1;
+            const startChartNum = sIdx * 6 + 1;
+
+            // 1. 시트 내용 패치
+            let sXml = baseSheetXml;
+            sXml = this.setCellValue(sXml, 'B5', sdata.course_name || '', true);
+            sXml = this.setCellValue(sXml, 'G5', sdata.display_period || '', true);
+            sXml = this.setCellValue(sXml, 'I5', sdata.respondent_count || 0, false);
+
+            const instructors = sdata.instructors || [];
+            if (instructors.length > 0) {
+              const inst0 = instructors[0];
+              sXml = this.setCellValue(sXml, 'B10', inst0.instructor_name || '', true);
+              sXml = this.setCellValue(sXml, 'C10', inst0.curriculum || '', true);
+              sXml = this.setCellValue(sXml, 'B11', inst0.hours || '', true);
+
+              const cur = inst0.current || {};
+              const cum = inst0.cumulative || {};
+              sXml = this.setCellValue(sXml, 'F10', cur.teaching_expertise || 0, false);
+              sXml = this.setCellValue(sXml, 'G10', cur.delivery_skill || 0, false);
+              sXml = this.setCellValue(sXml, 'H10', cur.practical_use || 0, false);
+              sXml = this.setCellValue(sXml, 'I10', cur.textbook_quality || 0, false);
+
+              sXml = this.setCellValue(sXml, 'F11', cum.teaching_expertise || 0, false);
+              sXml = this.setCellValue(sXml, 'G11', cum.delivery_skill || 0, false);
+              sXml = this.setCellValue(sXml, 'H11', cum.practical_use || 0, false);
+              sXml = this.setCellValue(sXml, 'I11', cum.textbook_quality || 0, false);
+            }
+
+            // 주관식 후기 반영
+            const comments = sdata.comments || {};
+            if (mode === 'instructor') {
+              const instF = comments.instructor_feedback || [];
+              const contF = comments.content_feedback || [];
+              const recF = comments.recommend_feedback || [];
+              for (let i = 0; i < 4; i++) {
+                sXml = this.setCellValue(sXml, `E${61 + i}`, instF[i] || '', true);
+                sXml = this.setCellValue(sXml, `E${65 + i}`, contF[i] || '', true);
+                sXml = this.setCellValue(sXml, `E${69 + i}`, recF[i] || '', true);
+              }
+            } else {
+              const instF = comments.instructor_feedback || [];
+              const contF = comments.content_feedback || [];
+              const operF = comments.operation_feedback || [];
+              const recF = comments.recommend_feedback || [];
+              const addF = comments.additional_courses || [];
+              sXml = this.setCellValue(sXml, 'E61', instF[0] || '', true);
+              sXml = this.setCellValue(sXml, 'E62', instF[1] || '', true);
+              sXml = this.setCellValue(sXml, 'E63', contF[0] || '', true);
+              sXml = this.setCellValue(sXml, 'E64', operF[0] || '', true);
+              sXml = this.setCellValue(sXml, 'E65', recF[0] || '', true);
+              sXml = this.setCellValue(sXml, 'E66', recF[1] || '', true);
+              sXml = this.setCellValue(sXml, 'E67', recF[2] || '', true);
+              sXml = this.setCellValue(sXml, 'E68', addF[0] || '', true);
+            }
+
+            zip.file(`xl/worksheets/sheet${sheetNum}.xml`, sXml);
+
+            // 2. Sheet Rels
+            const sRels = baseSheetRels.replace('drawing1.xml', `drawing${drawingNum}.xml`);
+            zip.file(`xl/worksheets/_rels/sheet${sheetNum}.xml.rels`, sRels);
+
+            // 3. Drawing XML
+            zip.file(`xl/drawings/drawing${drawingNum}.xml`, baseDrawingXml);
+
+            // 4. Drawing Rels
+            let dRels = baseDrawingRels;
+            for (let c = 0; c < 6; c++) {
+              dRels = dRels.replace(`../charts/chart${c + 1}.xml`, `../charts/chart${startChartNum + c}.xml`);
+            }
+            zip.file(`xl/drawings/_rels/drawing${drawingNum}.xml.rels`, dRels);
+
+            // 5. 6개 차트 주입
+            const chartsData = sdata.charts || {};
+            const chartDefs = [
+              [chartsData.chart0_satisfaction_trend, true, true],
+              [chartsData.chart1_nps_trend, true, true],
+              [chartsData.chart2_complaints, false, false],
+              [chartsData.chart3_preferred_format, false, false],
+              [chartsData.chart4_positions, false, false],
+              [chartsData.chart5_motives, false, false],
+            ];
+
+            chartDefs.forEach(([cData, isRef, isFloat], cIdx) => {
+              let cXml = baseChartsXml[cIdx];
+              if (cData && cData.categories && cData.values) {
+                cXml = this.updateChartXml(cXml, cData.categories, cData.values, isRef, isFloat);
+              }
+              zip.file(`xl/charts/chart${startChartNum + cIdx}.xml`, cXml);
+            });
+
+            // 시트명 처리
+            let rawTitle = sdata.sheet_title || `${sheetNum}차`;
+            let cleanTitle = rawTitle.replace(/[\/\\?*\[\]:]/g, '_').substring(0, 30);
+            if (usedTitles.has(cleanTitle)) {
+              cleanTitle = `${cleanTitle}_${sheetNum}`.substring(0, 30);
+            }
+            usedTitles.add(cleanTitle);
+
+            sheetEntries.push(`<sheet name="${this.escapeXml(cleanTitle)}" sheetId="${sheetNum}" r:id="rId${sheetNum}"/>`);
+            wbRelsEntries.push(`<Relationship Id="rId${sheetNum}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${sheetNum}.xml"/>`);
+          });
+
+          // 6. xl/workbook.xml 갱신
+          let wbXml = await zip.file('xl/workbook.xml').async('string');
+          wbXml = wbXml.replace(/<sheets>.*?<\/sheets>/s, `<sheets>${sheetEntries.join('')}</sheets>`);
+          wbXml = wbXml.replace(/<definedNames>.*?<\/definedNames>/s, '');
+          zip.file('xl/workbook.xml', wbXml);
+
+          // 7. xl/_rels/workbook.xml.rels 갱신
+          let wbRels = await zip.file('xl/_rels/workbook.xml.rels').async('string');
+          const otherRelsMatches = wbRels.match(/<Relationship\s+[^>]*\/>/g) || [];
+          const otherRels = otherRelsMatches.filter(r => !r.includes('relationships/worksheet'));
+          const allWbRels = otherRels.join('') + wbRelsEntries.join('');
+          wbRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${allWbRels}</Relationships>`;
+          zip.file('xl/_rels/workbook.xml.rels', wbRels);
+
+          // 8. [Content_Types].xml 갱신
+          let ctXml = await zip.file('[Content_Types].xml').async('string');
+          ctXml = ctXml.replace(/<Override\s+PartName="\/xl\/(worksheets|drawings|charts)\/[^>]*\/>/g, '');
+          const newOverrides = [];
+          sheets.forEach((_, sIdx) => {
+            const sheetNum = sIdx + 1;
+            newOverrides.push(`<Override PartName="/xl/worksheets/sheet${sheetNum}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`);
+            newOverrides.push(`<Override PartName="/xl/drawings/drawing${sheetNum}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`);
+            for (let c = 1; c <= 6; c++) {
+              const cNum = sIdx * 6 + c;
+              newOverrides.push(`<Override PartName="/xl/charts/chart${cNum}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`);
+            }
+          });
+          ctXml = ctXml.replace('</Types>', newOverrides.join('') + '</Types>');
+          zip.file('[Content_Types].xml', ctXml);
+
+          // 9. 다운로드 생성
+          const blob = await zip.generateAsync({
+            type: 'blob',
+            mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            compression: 'DEFLATE'
+          });
+
+          const targetName = mode === 'instructor' && reportData.instructor_name 
+            ? `${reportData.course_name}(${reportData.instructor_name})_강사별만족도` 
+            : `${reportData.course_name}_교육운영결과보고서`;
+          const cleanTarget = targetName.replace(/[\\/*?:\[\]]/g, '_');
+          const filename = `${cleanTarget}.xlsx`;
+
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(link.href);
+          return;
+        }
+      } catch (err) {
+        console.error('JSZip generation failed, falling back to ExcelJS:', err);
+      }
+    }
+
+    // 2. JSZip 미지원 환경 백업: ExcelJS
     if (!window.ExcelJS) {
-      throw new Error('ExcelJS 라이브러리가 로드되지 않았습니다.');
+      throw new Error('엑셀 생성 라이브러리가 로드되지 않았습니다.');
     }
 
     const workbook = new ExcelJS.Workbook();
@@ -657,10 +978,18 @@ class ClientEngine {
 
     const buffer = await workbook.xlsx.writeBuffer();
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const targetName = mode === 'instructor' && reportData.instructor_name 
+      ? `${reportData.course_name}(${reportData.instructor_name})_강사별만족도` 
+      : `${reportData.course_name}_교육운영결과보고서`;
+    const cleanTarget = targetName.replace(/[\\/*?:\[\]]/g, '_');
+    const filename = `${cleanTarget}.xlsx`;
+
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `${reportData.course_name}_결과보고서.xlsx`;
+    link.download = filename;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(link.href);
   }
 }
