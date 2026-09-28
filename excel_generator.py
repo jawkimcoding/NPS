@@ -2,7 +2,7 @@ import os
 import io
 import re
 import zipfile
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates_excel")
@@ -57,12 +57,12 @@ def update_chart_xml(xml_content: str, categories: List[Any], values: List[Any],
     return xml_content
 
 
-def set_cell_value(sheet_xml: str, coord: str, value: Any, is_string: bool = False) -> str:
+def set_cell_value(sheet_xml: str, coord: str, value: Any, is_string: bool = False, style_id: Optional[int] = None) -> str:
     """
     OpenXML sheet.xml 내의 특정 셀 좌표(예: B5, F10)의 값을 안전하게 치환/입력.
-    기존 스타일/서식은 100% 보존됨.
+    style_id가 제공되면 s 속성을 해당 스타일 ID로 갱신.
     """
-    pattern = rf'(<c\s+r="{coord}"[^>]*>)(.*?)(</c>)'
+    pattern = rf'(<c\s+r="{coord}"[^>]*?)(?:/>|>(.*?)</c>)'
     m = re.search(pattern, sheet_xml, flags=re.DOTALL)
 
     if is_string:
@@ -71,14 +71,20 @@ def set_cell_value(sheet_xml: str, coord: str, value: Any, is_string: bool = Fal
         if m:
             open_tag = m.group(1)
             open_tag = re.sub(r'\s+t="[^"]*"', '', open_tag)
-            open_tag = open_tag[:-1] + ' t="inlineStr">'
-            return sheet_xml[:m.start()] + open_tag + new_content + m.group(3) + sheet_xml[m.end():]
+            if style_id is not None:
+                if ' s="' in open_tag:
+                    open_tag = re.sub(r' s="[^"]*"', f' s="{style_id}"', open_tag)
+                else:
+                    open_tag += f' s="{style_id}"'
+            open_tag += ' t="inlineStr">'
+            return sheet_xml[:m.start()] + open_tag + new_content + '</c>' + sheet_xml[m.end():]
         else:
             row_num = re.search(r'(\d+)', coord).group(1)
             row_pattern = rf'(<row\s+r="{row_num}"[^>]*>)'
             rm = re.search(row_pattern, sheet_xml, flags=re.DOTALL)
             if rm:
-                cell_xml = f'<c r="{coord}" t="inlineStr">{new_content}</c>'
+                s_attr = f' s="{style_id}"' if style_id is not None else ''
+                cell_xml = f'<c r="{coord}"{s_attr} t="inlineStr">{new_content}</c>'
                 return sheet_xml[:rm.end()] + cell_xml + sheet_xml[rm.end():]
     else:
         if isinstance(value, (int, float)):
@@ -91,13 +97,20 @@ def set_cell_value(sheet_xml: str, coord: str, value: Any, is_string: bool = Fal
         if m:
             open_tag = m.group(1)
             open_tag = re.sub(r'\s+t="[^"]*"', '', open_tag)
-            return sheet_xml[:m.start()] + open_tag + new_content + m.group(3) + sheet_xml[m.end():]
+            if style_id is not None:
+                if ' s="' in open_tag:
+                    open_tag = re.sub(r' s="[^"]*"', f' s="{style_id}"', open_tag)
+                else:
+                    open_tag += f' s="{style_id}"'
+            open_tag += '>'
+            return sheet_xml[:m.start()] + open_tag + new_content + '</c>' + sheet_xml[m.end():]
         else:
             row_num = re.search(r'(\d+)', coord).group(1)
             row_pattern = rf'(<row\s+r="{row_num}"[^>]*>)'
             rm = re.search(row_pattern, sheet_xml, flags=re.DOTALL)
             if rm:
-                cell_xml = f'<c r="{coord}">{new_content}</c>'
+                s_attr = f' s="{style_id}"' if style_id is not None else ''
+                cell_xml = f'<c r="{coord}"{s_attr}>{new_content}</c>'
                 return sheet_xml[:rm.end()] + cell_xml + sheet_xml[rm.end():]
 
     return sheet_xml
@@ -190,10 +203,41 @@ class ExcelGenerator:
                 inst_feedbacks = comments.get("instructor_feedback", [])
                 content_feedbacks = comments.get("content_feedback", [])
                 rec_feedbacks = comments.get("recommend_feedback", [])
+                inst_sents = comments.get("instructor_sentiment", [])
+                content_sents = comments.get("content_sentiment", [])
+                rec_sents = comments.get("recommend_sentiment", [])
+
+                def get_style_id(sent: str) -> int:
+                    if sent in ("중립", "보완"):
+                        return 39
+                    elif sent == "부정":
+                        return 40
+                    return 20  # 긍정
+
                 for i in range(4):
-                    s_xml = set_cell_value(s_xml, f"E{61+i}", inst_feedbacks[i] if i < len(inst_feedbacks) else "", is_string=True)
-                    s_xml = set_cell_value(s_xml, f"E{65+i}", content_feedbacks[i] if i < len(content_feedbacks) else "", is_string=True)
-                    s_xml = set_cell_value(s_xml, f"E{69+i}", rec_feedbacks[i] if i < len(rec_feedbacks) else "", is_string=True)
+                    i_text = inst_feedbacks[i] if i < len(inst_feedbacks) else ""
+                    i_sent = inst_sents[i] if i < len(inst_sents) else "긍정"
+                    s_xml = set_cell_value(s_xml, f"E{61+i}", i_text, is_string=True)
+                    if i_text:
+                        s_xml = set_cell_value(s_xml, f"D{61+i}", i_sent, is_string=True, style_id=get_style_id(i_sent))
+                    else:
+                        s_xml = set_cell_value(s_xml, f"D{61+i}", "", is_string=True, style_id=20)
+
+                    c_text = content_feedbacks[i] if i < len(content_feedbacks) else ""
+                    c_sent = content_sents[i] if i < len(content_sents) else "긍정"
+                    s_xml = set_cell_value(s_xml, f"E{65+i}", c_text, is_string=True)
+                    if c_text:
+                        s_xml = set_cell_value(s_xml, f"D{65+i}", c_sent, is_string=True, style_id=get_style_id(c_sent))
+                    else:
+                        s_xml = set_cell_value(s_xml, f"D{65+i}", "", is_string=True, style_id=20)
+
+                    r_text = rec_feedbacks[i] if i < len(rec_feedbacks) else ""
+                    r_sent = rec_sents[i] if i < len(rec_sents) else "긍정"
+                    s_xml = set_cell_value(s_xml, f"E{69+i}", r_text, is_string=True)
+                    if r_text:
+                        s_xml = set_cell_value(s_xml, f"D{69+i}", r_sent, is_string=True, style_id=get_style_id(r_sent))
+                    else:
+                        s_xml = set_cell_value(s_xml, f"D{69+i}", "", is_string=True, style_id=20)
             else:
                 inst_feedbacks = comments.get("instructor_feedback", [])
                 content_feedbacks = comments.get("content_feedback", [])

@@ -441,6 +441,19 @@ function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {
   });
 }
 
+// 감성에 따른 배지 클래스 반환
+function getSentimentBadgeClass(sentiment) {
+  if (sentiment === '중립' || sentiment === '보완') return 'badge-neutral';
+  if (sentiment === '부정') return 'badge-negative';
+  return 'badge-positive';
+}
+
+// 감성 드롭다운 변경 시 배지 클래스 실시간 전환
+function updateSentimentSelectClass(selectEl) {
+  selectEl.classList.remove('badge-positive', 'badge-neutral', 'badge-negative');
+  selectEl.classList.add(getSentimentBadgeClass(selectEl.value));
+}
+
 // 주관식 후기 테이블 동적 렌더링 (강사별만족도 / 교육운영결과보고서 양식 맞춤)
 function renderCommentsSection(sheet) {
   const tbody = document.getElementById('commentsTableBody');
@@ -450,32 +463,45 @@ function renderCommentsSection(sheet) {
   const isInstructorMode = (currentMode === 'instructor');
 
   if (isInstructorMode) {
-    // 강사별 만족도 샘플 양식: 3개 섹션 + '긍정' 배지
+    // 강사별 만족도 샘플 양식: 3개 섹션 + '긍정/중립/부정' 선택 드롭다운
     const sections = [
-      { key: 'instructor_feedback', title: '  강사님 관련 의견', idPrefix: 'commInst' },
-      { key: 'content_feedback', title: '  교육 내용 관련 의견', idPrefix: 'commContent' },
-      { key: 'recommend_feedback', title: '  본 교육과정 추천 시 추천 사유', idPrefix: 'commRec' }
+      { key: 'instructor_feedback', sentKey: 'instructor_sentiment', title: '  강사님 관련 의견', idPrefix: 'commInst' },
+      { key: 'content_feedback', sentKey: 'content_sentiment', title: '  교육 내용 관련 의견', idPrefix: 'commContent' },
+      { key: 'recommend_feedback', sentKey: 'recommend_sentiment', title: '  본 교육과정 추천 시 추천 사유', idPrefix: 'commRec' }
     ];
 
     sections.forEach(sec => {
       const items = comments[sec.key] || [];
+      const sents = comments[sec.sentKey] || [];
       const rowCount = Math.max(4, items.length);
 
       for (let i = 0; i < rowCount; i++) {
         const tr = document.createElement('tr');
+        const textVal = items[i] || '';
+        const sentVal = sents[i] || '긍정';
+        const badgeClass = getSentimentBadgeClass(sentVal);
+
+        const selectHtml = `
+          <select id="${sec.idPrefix}Sent${i}" class="badge-select ${badgeClass}" onchange="updateSentimentSelectClass(this)">
+            <option value="긍정" ${sentVal === '긍정' ? 'selected' : ''}>긍정</option>
+            <option value="중립" ${sentVal === '중립' || sentVal === '보완' ? 'selected' : ''}>중립</option>
+            <option value="부정" ${sentVal === '부정' ? 'selected' : ''}>부정</option>
+          </select>
+        `;
+
         if (i === 0) {
           tr.innerHTML = `
             <td class="font-bold text-center align-middle" style="width: 25%;" rowspan="${rowCount}">${escapeHtml(sec.title)}</td>
-            <td class="text-center align-middle" style="width: 10%;"><span class="badge-positive">긍정</span></td>
-            <td style="width: 65%;">
-              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+            <td class="text-center align-middle" style="width: 12%;">${selectHtml}</td>
+            <td style="width: 63%;">
+              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(textVal)}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
             </td>
           `;
         } else {
           tr.innerHTML = `
-            <td class="text-center align-middle"><span class="badge-positive">긍정</span></td>
+            <td class="text-center align-middle">${selectHtml}</td>
             <td>
-              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(textVal)}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
             </td>
           `;
         }
@@ -526,15 +552,44 @@ async function saveCurrentComments() {
 
   const commentsObj = {};
   if (currentMode === 'instructor') {
-    commentsObj.instructor_feedback = [0,1,2,3,4].map(i => document.getElementById(`commInst${i}`)?.value?.trim()).filter(Boolean);
-    commentsObj.content_feedback = [0,1,2,3,4].map(i => document.getElementById(`commContent${i}`)?.value?.trim()).filter(Boolean);
-    commentsObj.recommend_feedback = [0,1,2,3,4].map(i => document.getElementById(`commRec${i}`)?.value?.trim()).filter(Boolean);
+    const instTexts = [];
+    const instSents = [];
+    const contTexts = [];
+    const contSents = [];
+    const recTexts = [];
+    const recSents = [];
+
+    for (let i = 0; i < 10; i++) {
+      const el = document.getElementById(`commInst${i}`);
+      if (!el) break;
+      instTexts.push(el.value.trim());
+      instSents.push(document.getElementById(`commInstSent${i}`)?.value || '긍정');
+    }
+    for (let i = 0; i < 10; i++) {
+      const el = document.getElementById(`commContent${i}`);
+      if (!el) break;
+      contTexts.push(el.value.trim());
+      contSents.push(document.getElementById(`commContentSent${i}`)?.value || '긍정');
+    }
+    for (let i = 0; i < 10; i++) {
+      const el = document.getElementById(`commRec${i}`);
+      if (!el) break;
+      recTexts.push(el.value.trim());
+      recSents.push(document.getElementById(`commRecSent${i}`)?.value || '긍정');
+    }
+
+    commentsObj.instructor_feedback = instTexts;
+    commentsObj.instructor_sentiment = instSents;
+    commentsObj.content_feedback = contTexts;
+    commentsObj.content_sentiment = contSents;
+    commentsObj.recommend_feedback = recTexts;
+    commentsObj.recommend_sentiment = recSents;
   } else {
-    commentsObj.instructor_feedback = [0,1,2,3].map(i => document.getElementById(`commInst${i}`)?.value?.trim()).filter(Boolean);
-    commentsObj.content_feedback = [0,1,2,3].map(i => document.getElementById(`commContent${i}`)?.value?.trim()).filter(Boolean);
-    commentsObj.operation_feedback = [0,1,2,3].map(i => document.getElementById(`commOper${i}`)?.value?.trim()).filter(Boolean);
-    commentsObj.recommend_feedback = [0,1,2,3].map(i => document.getElementById(`commRec${i}`)?.value?.trim()).filter(Boolean);
-    commentsObj.additional_courses = [0,1,2,3].map(i => document.getElementById(`commAdd${i}`)?.value?.trim()).filter(Boolean);
+    commentsObj.instructor_feedback = [0,1,2,3].map(i => document.getElementById(`commInst${i}`)?.value?.trim() || '').filter(Boolean);
+    commentsObj.content_feedback = [0,1,2,3].map(i => document.getElementById(`commContent${i}`)?.value?.trim() || '').filter(Boolean);
+    commentsObj.operation_feedback = [0,1,2,3].map(i => document.getElementById(`commOper${i}`)?.value?.trim() || '').filter(Boolean);
+    commentsObj.recommend_feedback = [0,1,2,3].map(i => document.getElementById(`commRec${i}`)?.value?.trim() || '').filter(Boolean);
+    commentsObj.additional_courses = [0,1,2,3].map(i => document.getElementById(`commAdd${i}`)?.value?.trim() || '').filter(Boolean);
   }
 
   try {

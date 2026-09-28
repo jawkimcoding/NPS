@@ -431,7 +431,10 @@ class DataManager:
             round_comments = self.comments.get(comment_key, {
                 "instructor_feedback": [],
                 "content_feedback": [],
-                "recommend_feedback": []
+                "recommend_feedback": [],
+                "instructor_sentiment": [],
+                "content_sentiment": [],
+                "recommend_sentiment": []
             })
 
             # 시트명 결정 (예: 3월, 7월 등)
@@ -467,7 +470,7 @@ class DataManager:
             "sheets": sheet_data_list
         }
 
-    def save_comments(self, comment_key: str, comments: Dict[str, List[str]]):
+    def save_comments(self, comment_key: str, comments: Dict[str, Any]):
         self.comments[comment_key] = comments
         self.save_comments_store()
 

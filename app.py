@@ -36,9 +36,14 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 class CommentUpdateRequest(BaseModel):
     comment_key: str
-    instructor_feedback: List[str]
-    content_feedback: List[str]
-    recommend_feedback: List[str]
+    instructor_feedback: Optional[List[str]] = []
+    content_feedback: Optional[List[str]] = []
+    recommend_feedback: Optional[List[str]] = []
+    instructor_sentiment: Optional[List[str]] = []
+    content_sentiment: Optional[List[str]] = []
+    recommend_sentiment: Optional[List[str]] = []
+    operation_feedback: Optional[List[str]] = []
+    additional_courses: Optional[List[str]] = []
 
 
 class CurriculumUpdateRequest(BaseModel):
@@ -74,7 +79,12 @@ async def update_comments(req: CommentUpdateRequest):
     data_manager.save_comments(req.comment_key, {
         "instructor_feedback": req.instructor_feedback,
         "content_feedback": req.content_feedback,
-        "recommend_feedback": req.recommend_feedback
+        "recommend_feedback": req.recommend_feedback,
+        "instructor_sentiment": req.instructor_sentiment,
+        "content_sentiment": req.content_sentiment,
+        "recommend_sentiment": req.recommend_sentiment,
+        "operation_feedback": req.operation_feedback,
+        "additional_courses": req.additional_courses
     })
     return {"status": "success", "message": "주관식 의견이 저장되었습니다."}
 

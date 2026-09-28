@@ -532,8 +532,8 @@ class ClientEngine {
     return xmlContent;
   }
 
-  setCellValue(sheetXml, coord, value, isString = false) {
-    const pattern = new RegExp(`(<c\\s+r="${coord}"[^>]*>)(.*?)(</c>)`, 's');
+  setCellValue(sheetXml, coord, value, isString = false, styleId = null) {
+    const pattern = new RegExp(`(<c\\s+r="${coord}"[^>]*?)(?:/>|>(.*?)</c>)`, 's');
     const m = sheetXml.match(pattern);
 
     if (isString) {
@@ -541,14 +541,22 @@ class ClientEngine {
       const newContent = `<is><t>${valStr}</t></is>`;
       if (m) {
         let openTag = m[1].replace(/\s+t="[^"]*"/, '');
-        openTag = openTag.slice(0, -1) + ' t="inlineStr">';
-        return sheetXml.slice(0, m.index) + openTag + newContent + m[3] + sheetXml.slice(m.index + m[0].length);
+        if (styleId !== null) {
+          if (/\ss="[^"]*"/.test(openTag)) {
+            openTag = openTag.replace(/\ss="[^"]*"/, ` s="${styleId}"`);
+          } else {
+            openTag += ` s="${styleId}"`;
+          }
+        }
+        openTag += ' t="inlineStr">';
+        return sheetXml.slice(0, m.index) + openTag + newContent + '</c>' + sheetXml.slice(m.index + m[0].length);
       } else {
         const rowNum = coord.match(/\d+/)[0];
         const rowPattern = new RegExp(`(<row\\s+r="${rowNum}"[^>]*>)`, 's');
         const rm = sheetXml.match(rowPattern);
         if (rm) {
-          const cellXml = `<c r="${coord}" t="inlineStr">${newContent}</c>`;
+          const sAttr = styleId !== null ? ` s="${styleId}"` : '';
+          const cellXml = `<c r="${coord}"${sAttr} t="inlineStr">${newContent}</c>`;
           const idx = rm.index + rm[0].length;
           return sheetXml.slice(0, idx) + cellXml + sheetXml.slice(idx);
         }
@@ -563,13 +571,22 @@ class ClientEngine {
       const newContent = `<v>${valNum}</v>`;
       if (m) {
         let openTag = m[1].replace(/\s+t="[^"]*"/, '');
-        return sheetXml.slice(0, m.index) + openTag + newContent + m[3] + sheetXml.slice(m.index + m[0].length);
+        if (styleId !== null) {
+          if (/\ss="[^"]*"/.test(openTag)) {
+            openTag = openTag.replace(/\ss="[^"]*"/, ` s="${styleId}"`);
+          } else {
+            openTag += ` s="${styleId}"`;
+          }
+        }
+        openTag += '>';
+        return sheetXml.slice(0, m.index) + openTag + newContent + '</c>' + sheetXml.slice(m.index + m[0].length);
       } else {
         const rowNum = coord.match(/\d+/)[0];
         const rowPattern = new RegExp(`(<row\\s+r="${rowNum}"[^>]*>)`, 's');
         const rm = sheetXml.match(rowPattern);
         if (rm) {
-          const cellXml = `<c r="${coord}">${newContent}</c>`;
+          const sAttr = styleId !== null ? ` s="${styleId}"` : '';
+          const cellXml = `<c r="${coord}"${sAttr}>${newContent}</c>`;
           const idx = rm.index + rm[0].length;
           return sheetXml.slice(0, idx) + cellXml + sheetXml.slice(idx);
         }
@@ -679,10 +696,43 @@ class ClientEngine {
               const instF = comments.instructor_feedback || [];
               const contF = comments.content_feedback || [];
               const recF = comments.recommend_feedback || [];
+              const instS = comments.instructor_sentiment || [];
+              const contS = comments.content_sentiment || [];
+              const recS = comments.recommend_sentiment || [];
+
+              const getStyleId = (sent) => {
+                if (sent === '중립' || sent === '보완') return 39;
+                if (sent === '부정') return 40;
+                return 20; // 긍정
+              };
+
               for (let i = 0; i < 4; i++) {
-                sXml = this.setCellValue(sXml, `E${61 + i}`, instF[i] || '', true);
-                sXml = this.setCellValue(sXml, `E${65 + i}`, contF[i] || '', true);
-                sXml = this.setCellValue(sXml, `E${69 + i}`, recF[i] || '', true);
+                const iText = instF[i] || '';
+                const iSent = instS[i] || '긍정';
+                sXml = this.setCellValue(sXml, `E${61 + i}`, iText, true);
+                if (iText) {
+                  sXml = this.setCellValue(sXml, `D${61 + i}`, iSent, true, getStyleId(iSent));
+                } else {
+                  sXml = this.setCellValue(sXml, `D${61 + i}`, '', true, 20);
+                }
+
+                const cText = contF[i] || '';
+                const cSent = contS[i] || '긍정';
+                sXml = this.setCellValue(sXml, `E${65 + i}`, cText, true);
+                if (cText) {
+                  sXml = this.setCellValue(sXml, `D${65 + i}`, cSent, true, getStyleId(cSent));
+                } else {
+                  sXml = this.setCellValue(sXml, `D${65 + i}`, '', true, 20);
+                }
+
+                const rText = recF[i] || '';
+                const rSent = recS[i] || '긍정';
+                sXml = this.setCellValue(sXml, `E${69 + i}`, rText, true);
+                if (rText) {
+                  sXml = this.setCellValue(sXml, `D${69 + i}`, rSent, true, getStyleId(rSent));
+                } else {
+                  sXml = this.setCellValue(sXml, `D${69 + i}`, '', true, 20);
+                }
               }
             } else {
               const instF = comments.instructor_feedback || [];
@@ -958,9 +1008,12 @@ class ClientEngine {
       const instF = comments.instructor_feedback || [];
       const contF = comments.content_feedback || [];
       const recF = comments.recommend_feedback || [];
+      const instS = comments.instructor_sentiment || [];
+      const contS = comments.content_sentiment || [];
+      const recS = comments.recommend_sentiment || [];
 
-      // 3개 섹션 + '긍정' 배지
-      const addSection = (rStart, title, items) => {
+      // 3개 섹션 + 감성 배지 (긍정/중립/부정)
+      const addSection = (rStart, title, items, sents) => {
         ws.mergeCells(`B${rStart}:C${rStart + 3}`);
         const tCell = ws.getCell(`B${rStart}`);
         tCell.value = title;
@@ -970,25 +1023,40 @@ class ClientEngine {
 
         for (let i = 0; i < 4; i++) {
           const row = rStart + i;
+          const textVal = items[i] || '';
+          const sentVal = sents[i] || '긍정';
           const posCell = ws.getCell(`D${row}`);
-          posCell.value = '긍정';
-          posCell.font = { name: '맑은 고딕', size: 11, bold: false, color: { argb: 'FF006100' } };
-          posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+
+          if (textVal) {
+            posCell.value = sentVal;
+            if (sentVal === '중립' || sentVal === '보완') {
+              posCell.font = { name: '맑은 고딕', size: 11, bold: false, color: { argb: 'FF9C5700' } };
+              posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFEB9C' } };
+            } else if (sentVal === '부정') {
+              posCell.font = { name: '맑은 고딕', size: 11, bold: false, color: { argb: 'FF9C0006' } };
+              posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC7CE' } };
+            } else {
+              posCell.font = { name: '맑은 고딕', size: 11, bold: false, color: { argb: 'FF006100' } };
+              posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } };
+            }
+          } else {
+            posCell.value = '';
+          }
           posCell.alignment = { vertical: 'middle', horizontal: 'center' };
           posCell.border = thinBorder;
 
           ws.mergeCells(`E${row}:I${row}`);
           const valCell = ws.getCell(`E${row}`);
-          valCell.value = items[i] || '';
+          valCell.value = textVal;
           valCell.font = { name: '맑은 고딕', size: 10 };
           valCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
           valCell.border = thinBorder;
         }
       };
 
-      addSection(61, '  강사님 관련 의견', instF);
-      addSection(65, '  교육 내용 관련 의견', contF);
-      addSection(69, '  본 교육과정 추천 시 추천 사유', recF);
+      addSection(61, '  강사님 관련 의견', instF, instS);
+      addSection(65, '  교육 내용 관련 의견', contF, contS);
+      addSection(69, '  본 교육과정 추천 시 추천 사유', recF, recS);
     });
 
     const buffer = await workbook.xlsx.writeBuffer();

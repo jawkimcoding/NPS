@@ -87,6 +87,43 @@
       display: inline-block;
       width: 100%;
     }
+    .badge-neutral {
+      background-color: #FFEB9C;
+      color: #9C5700;
+      font-size: 10pt;
+      font-weight: bold;
+      text-align: center;
+      padding: 2px 6px;
+      display: inline-block;
+      width: 100%;
+    }
+    .badge-negative {
+      background-color: #FFC7CE;
+      color: #9C0006;
+      font-size: 10pt;
+      font-weight: bold;
+      text-align: center;
+      padding: 2px 6px;
+      display: inline-block;
+      width: 100%;
+    }
+    .badge-select {
+      font-size: 10pt;
+      font-weight: bold;
+      text-align: center;
+      text-align-last: center;
+      padding: 2px 4px;
+      border-radius: 3px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      cursor: pointer;
+      outline: none;
+      transition: background-color 0.15s ease, color 0.15s ease;
+      width: 90%;
+      display: inline-block;
+    }
+    .badge-select:focus {
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+    }
     .chart-container-full {
       height: 220px;
       width: 100%;
@@ -101,6 +138,13 @@
       .no-print { display: none !important; }
       body { background: white; padding: 0; }
       .excel-paper { box-shadow: none; border: none; padding: 0; max-width: 100%; }
+      .badge-select {
+        border: none !important;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        background: inherit !important;
+      }
     }
   </style>
 </head>
