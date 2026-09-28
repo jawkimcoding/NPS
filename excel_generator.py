@@ -180,6 +180,94 @@ class ExcelGenerator:
             s_xml = set_cell_value(s_xml, "I5", sdata.get("respondent_count", 0), is_string=False)
 
             instructors = sdata.get("instructors", [])
+            extra_rows = (len(instructors) - 1) * 2 if (mode == "course" and len(instructors) > 1) else 0
+
+            d_xml = base_drawing_xml
+
+            if extra_rows > 0:
+                # 1. 12행 이상의 모든 row 및 cell 좌표 시프트 (+ extra_rows)
+                def shift_cell_coord(m):
+                    col = m.group(1)
+                    r_num = int(m.group(2))
+                    if r_num >= 12:
+                        return f'<c r="{col}{r_num + extra_rows}"'
+                    return m.group(0)
+
+                def shift_row_num(m):
+                    r_num = int(m.group(1))
+                    if r_num >= 12:
+                        return f'<row r="{r_num + extra_rows}"'
+                    return m.group(0)
+
+                def shift_merge_cell(m):
+                    c1, r1, c2, r2 = m.groups()
+                    r1_num, r2_num = int(r1), int(r2)
+                    new_r1 = r1_num + extra_rows if r1_num >= 12 else r1_num
+                    new_r2 = r2_num + extra_rows if r2_num >= 12 else r2_num
+                    return f'<mergeCell ref="{c1}{new_r1}:{c2}{new_r2}"/>'
+
+                s_xml = re.sub(r'<c\s+r="([A-Z]+)(\d+)"', shift_cell_coord, s_xml)
+                s_xml = re.sub(r'<row\s+r="(\d+)"', shift_row_num, s_xml)
+                s_xml = re.sub(r'<mergeCell\s+ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/>', shift_merge_cell, s_xml)
+
+                # 2. 추가 강사 행 (12, 13, 14, 15 ...) 생성
+                new_rows_xml = []
+                new_merge_cells = []
+                for k in range(1, len(instructors)):
+                    r_top = 10 + k * 2
+                    r_bot = 11 + k * 2
+                    inst_k = instructors[k]
+                    cur_k = inst_k.get("current", {})
+                    cum_k = inst_k.get("cumulative", {})
+                    name_str = escape_xml(inst_k.get("instructor_name", ""))
+                    curr_str = escape_xml(inst_k.get("curriculum", ""))
+                    hours_val = escape_xml(inst_k.get("hours", ""))
+
+                    r_top_xml = (
+                        f'<row r="{r_top}" spans="2:9" ht="67.5" customHeight="1" x14ac:dyDescent="0.3">'
+                        f'<c r="B{r_top}" s="10" t="inlineStr"><is><t>{name_str}</t></is></c>'
+                        f'<c r="C{r_top}" s="40" t="inlineStr"><is><t>{curr_str}</t></is></c>'
+                        f'<c r="D{r_top}" s="41"/>'
+                        f'<c r="E{r_top}" s="11" t="inlineStr"><is><t>이번&#10;차수</t></is></c>'
+                        f'<c r="F{r_top}" s="12"><v>{float(cur_k.get("teaching_expertise", 0)):.1f}</v></c>'
+                        f'<c r="G{r_top}" s="12"><v>{float(cur_k.get("delivery_skill", 0)):.1f}</v></c>'
+                        f'<c r="H{r_top}" s="12"><v>{float(cur_k.get("practical_use", 0)):.1f}</v></c>'
+                        f'<c r="I{r_top}" s="13"><v>{float(cur_k.get("textbook_quality", 0)):.1f}</v></c>'
+                        f'</row>'
+                    )
+                    r_bot_xml = (
+                        f'<row r="{r_bot}" spans="2:9" ht="67.5" customHeight="1" x14ac:dyDescent="0.3">'
+                        f'<c r="B{r_bot}" s="14" t="inlineStr"><is><t>{hours_val}</t></is></c>'
+                        f'<c r="C{r_bot}" s="42"/>'
+                        f'<c r="D{r_bot}" s="43"/>'
+                        f'<c r="E{r_bot}" s="11" t="inlineStr"><is><t>누적&#10;평균</t></is></c>'
+                        f'<c r="F{r_bot}" s="12"><v>{float(cum_k.get("teaching_expertise", 0)):.1f}</v></c>'
+                        f'<c r="G{r_bot}" s="12"><v>{float(cum_k.get("delivery_skill", 0)):.1f}</v></c>'
+                        f'<c r="H{r_bot}" s="12"><v>{float(cum_k.get("practical_use", 0)):.1f}</v></c>'
+                        f'<c r="I{r_bot}" s="13"><v>{float(cum_k.get("textbook_quality", 0)):.1f}</v></c>'
+                        f'</row>'
+                    )
+                    new_rows_xml.append(r_top_xml + r_bot_xml)
+                    new_merge_cells.append(f'<mergeCell ref="C{r_top}:D{r_bot}"/>')
+
+                # 11행 끝난 직후 삽입
+                s_xml = re.sub(r'(<row\s+r="11"[^>]*>.*?</row>)', rf'\g<1>{"".join(new_rows_xml)}', s_xml, flags=re.DOTALL)
+
+                # mergeCells count 증가 및 추가
+                if new_merge_cells:
+                    def add_merge_cells(m):
+                        cnt = int(m.group(1)) + len(new_merge_cells)
+                        return f'<mergeCells count="{cnt}">' + "".join(new_merge_cells)
+                    s_xml = re.sub(r'<mergeCells\s+count="(\d+)">', add_merge_cells, s_xml)
+
+                # drawing1.xml 차트 앵커 시프트
+                def shift_chart_row(m):
+                    r_num = int(m.group(1))
+                    if r_num >= 11:
+                        return f'<xdr:row>{r_num + extra_rows}</xdr:row>'
+                    return m.group(0)
+                d_xml = re.sub(r'<xdr:row>(\d+)</xdr:row>', shift_chart_row, d_xml)
+
             if instructors:
                 inst0 = instructors[0]
                 s_xml = set_cell_value(s_xml, "B10", inst0.get("instructor_name", ""), is_string=True)
@@ -244,14 +332,14 @@ class ExcelGenerator:
                 oper_feedbacks = comments.get("operation_feedback", [])
                 rec_feedbacks = comments.get("recommend_feedback", [])
                 add_feedbacks = comments.get("additional_courses", [])
-                s_xml = set_cell_value(s_xml, "E61", inst_feedbacks[0] if len(inst_feedbacks) > 0 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E62", inst_feedbacks[1] if len(inst_feedbacks) > 1 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E63", content_feedbacks[0] if len(content_feedbacks) > 0 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E64", oper_feedbacks[0] if len(oper_feedbacks) > 0 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E65", rec_feedbacks[0] if len(rec_feedbacks) > 0 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E66", rec_feedbacks[1] if len(rec_feedbacks) > 1 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E67", rec_feedbacks[2] if len(rec_feedbacks) > 2 else "", is_string=True)
-                s_xml = set_cell_value(s_xml, "E68", add_feedbacks[0] if len(add_feedbacks) > 0 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{61 + extra_rows}", inst_feedbacks[0] if len(inst_feedbacks) > 0 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{62 + extra_rows}", inst_feedbacks[1] if len(inst_feedbacks) > 1 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{63 + extra_rows}", content_feedbacks[0] if len(content_feedbacks) > 0 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{64 + extra_rows}", oper_feedbacks[0] if len(oper_feedbacks) > 0 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{65 + extra_rows}", rec_feedbacks[0] if len(rec_feedbacks) > 0 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{66 + extra_rows}", rec_feedbacks[1] if len(rec_feedbacks) > 1 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{67 + extra_rows}", rec_feedbacks[2] if len(rec_feedbacks) > 2 else "", is_string=True)
+                s_xml = set_cell_value(s_xml, f"E{68 + extra_rows}", add_feedbacks[0] if len(add_feedbacks) > 0 else "", is_string=True)
 
             files[f"xl/worksheets/sheet{sheet_num}.xml"] = s_xml.encode("utf-8")
 
@@ -260,7 +348,7 @@ class ExcelGenerator:
             files[f"xl/worksheets/_rels/sheet{sheet_num}.xml.rels"] = s_rels.encode("utf-8")
 
             # 3. Drawing XML
-            files[f"xl/drawings/drawing{drawing_num}.xml"] = base_drawing_xml.encode("utf-8")
+            files[f"xl/drawings/drawing{drawing_num}.xml"] = d_xml.encode("utf-8")
 
             # 4. Drawing rels -> charts
             d_rels = base_drawing_rels

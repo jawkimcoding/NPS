@@ -454,7 +454,90 @@ function updateSentimentSelectClass(selectEl) {
   selectEl.classList.add(getSentimentBadgeClass(selectEl.value));
 }
 
-// 주관식 후기 테이블 동적 렌더링 (강사별만족도 / 교육운영결과보고서 양식 맞춤)
+// 현재 화면의 주관식 입력값을 sheet.comments 객체에 즉시 동기화
+function syncInputsToComments() {
+  if (!currentReportData || !currentReportData.sheets) return;
+  const sheet = currentReportData.sheets[currentSheetIndex];
+  if (!sheet) return;
+
+  sheet.comments = sheet.comments || {};
+  const isInstructorMode = (currentMode === 'instructor');
+
+  if (isInstructorMode) {
+    const sections = [
+      { key: 'instructor_feedback', sentKey: 'instructor_sentiment', idPrefix: 'commInst' },
+      { key: 'content_feedback', sentKey: 'content_sentiment', idPrefix: 'commContent' },
+      { key: 'recommend_feedback', sentKey: 'recommend_sentiment', idPrefix: 'commRec' }
+    ];
+    sections.forEach(sec => {
+      const texts = [];
+      const sents = [];
+      for (let i = 0; i < 50; i++) {
+        const textEl = document.getElementById(`${sec.idPrefix}${i}`);
+        if (!textEl) break;
+        texts.push(textEl.value);
+        const sentEl = document.getElementById(`${sec.idPrefix}Sent${i}`);
+        sents.push(sentEl ? sentEl.value : '긍정');
+      }
+      sheet.comments[sec.key] = texts;
+      sheet.comments[sec.sentKey] = sents;
+    });
+  } else {
+    const sections = [
+      { key: 'instructor_feedback', idPrefix: 'commInst' },
+      { key: 'content_feedback', idPrefix: 'commContent' },
+      { key: 'operation_feedback', idPrefix: 'commOper' },
+      { key: 'recommend_feedback', idPrefix: 'commRec' },
+      { key: 'additional_courses', idPrefix: 'commAdd' }
+    ];
+    sections.forEach(sec => {
+      const texts = [];
+      for (let i = 0; i < 50; i++) {
+        const textEl = document.getElementById(`${sec.idPrefix}${i}`);
+        if (!textEl) break;
+        texts.push(textEl.value);
+      }
+      sheet.comments[sec.key] = texts;
+    });
+  }
+}
+
+// 주관식 항목 추가
+window.addCommentItem = function(secKey, sentKey) {
+  syncInputsToComments();
+  const sheet = currentReportData.sheets[currentSheetIndex];
+  if (!sheet) return;
+
+  sheet.comments = sheet.comments || {};
+  sheet.comments[secKey] = sheet.comments[secKey] || [];
+  sheet.comments[secKey].push('');
+
+  if (sentKey) {
+    sheet.comments[sentKey] = sheet.comments[sentKey] || [];
+    sheet.comments[sentKey].push('긍정');
+  }
+
+  renderCommentsSection(sheet);
+};
+
+// 주관식 항목 삭제
+window.removeCommentItem = function(secKey, sentKey, idx) {
+  syncInputsToComments();
+  const sheet = currentReportData.sheets[currentSheetIndex];
+  if (!sheet) return;
+
+  sheet.comments = sheet.comments || {};
+  if (sheet.comments[secKey]) {
+    sheet.comments[secKey].splice(idx, 1);
+  }
+  if (sentKey && sheet.comments[sentKey]) {
+    sheet.comments[sentKey].splice(idx, 1);
+  }
+
+  renderCommentsSection(sheet);
+};
+
+// 주관식 후기 테이블 동적 렌더링 (강사별만족도 / 교육운영결과보고서 양식 맞춤 & 동적 행 추가/삭제 지원)
 function renderCommentsSection(sheet) {
   const tbody = document.getElementById('commentsTableBody');
   tbody.innerHTML = '';
@@ -463,17 +546,25 @@ function renderCommentsSection(sheet) {
   const isInstructorMode = (currentMode === 'instructor');
 
   if (isInstructorMode) {
-    // 강사별 만족도 샘플 양식: 3개 섹션 + '긍정/중립/부정' 선택 드롭다운
+    // 강사별 만족도 샘플 양식: 3개 섹션 + '긍정/중립/부정' 선택 드롭다운 + 동적 행 추가/삭제
     const sections = [
-      { key: 'instructor_feedback', sentKey: 'instructor_sentiment', title: '  강사님 관련 의견', idPrefix: 'commInst' },
-      { key: 'content_feedback', sentKey: 'content_sentiment', title: '  교육 내용 관련 의견', idPrefix: 'commContent' },
-      { key: 'recommend_feedback', sentKey: 'recommend_sentiment', title: '  본 교육과정 추천 시 추천 사유', idPrefix: 'commRec' }
+      { key: 'instructor_feedback', sentKey: 'instructor_sentiment', title: '강사님 관련 의견', idPrefix: 'commInst', defaultCount: 4 },
+      { key: 'content_feedback', sentKey: 'content_sentiment', title: '교육 내용 관련 의견', idPrefix: 'commContent', defaultCount: 4 },
+      { key: 'recommend_feedback', sentKey: 'recommend_sentiment', title: '본 교육과정 추천 시 추천 사유', idPrefix: 'commRec', defaultCount: 4 }
     ];
 
     sections.forEach(sec => {
-      const items = comments[sec.key] || [];
-      const sents = comments[sec.sentKey] || [];
-      const rowCount = Math.max(4, items.length);
+      let items = comments[sec.key] || [];
+      let sents = comments[sec.sentKey] || [];
+
+      // 최소 기본 칸수 보장
+      if (items.length === 0) {
+        items = Array(sec.defaultCount).fill('');
+        sents = Array(sec.defaultCount).fill('긍정');
+        comments[sec.key] = items;
+        comments[sec.sentKey] = sents;
+      }
+      const rowCount = items.length;
 
       for (let i = 0; i < rowCount; i++) {
         const tr = document.createElement('tr');
@@ -489,19 +580,39 @@ function renderCommentsSection(sheet) {
           </select>
         `;
 
+        const deleteBtnHtml = `
+          <button type="button" onclick="removeCommentItem('${sec.key}', '${sec.sentKey}', ${i})" class="text-slate-400 hover:text-rose-600 px-1.5 py-0.5 rounded transition text-xs ml-1 flex-shrink-0" title="이 항목 삭제">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        `;
+
         if (i === 0) {
+          const headerHtml = `
+            <div class="flex items-center justify-between px-1.5">
+              <span class="font-bold text-slate-800">${escapeHtml(sec.title)}</span>
+              <button type="button" onclick="addCommentItem('${sec.key}', '${sec.sentKey}')" class="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded border border-slate-300 transition shadow-xs flex items-center" title="의견 칸 추가">
+                <i class="fa-solid fa-plus text-[10px] mr-1"></i>추가
+              </button>
+            </div>
+          `;
           tr.innerHTML = `
-            <td class="font-bold text-center align-middle" style="width: 25%;" rowspan="${rowCount}">${escapeHtml(sec.title)}</td>
+            <td class="align-middle bg-slate-50/70" style="width: 25%;" rowspan="${rowCount}">${headerHtml}</td>
             <td class="text-center align-middle" style="width: 12%;">${selectHtml}</td>
             <td style="width: 63%;">
-              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(textVal)}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+              <div class="flex items-center">
+                <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(textVal)}" class="flex-1 text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+                ${deleteBtnHtml}
+              </div>
             </td>
           `;
         } else {
           tr.innerHTML = `
             <td class="text-center align-middle">${selectHtml}</td>
             <td>
-              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(textVal)}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+              <div class="flex items-center">
+                <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(textVal)}" class="flex-1 text-xs p-1 border-0 focus:ring-1 focus:ring-blue-500 rounded" placeholder="의견을 입력하세요" />
+                ${deleteBtnHtml}
+              </div>
             </td>
           `;
         }
@@ -510,32 +621,56 @@ function renderCommentsSection(sheet) {
     });
 
   } else {
-    // 교육운영결과보고서 샘플 양식: 5개 섹션
+    // 교육운영결과보고서 샘플 양식: 5개 섹션 + 동적 행 추가/삭제
     const sections = [
-      { key: 'instructor_feedback', title: '  강사님 관련 의견', idPrefix: 'commInst', defaultCount: 2 },
-      { key: 'content_feedback', title: '  교육 내용 관련 의견', idPrefix: 'commContent', defaultCount: 1 },
-      { key: 'operation_feedback', title: '  교육 신청에서 종료까지 교육 운영 관련 의견', idPrefix: 'commOper', defaultCount: 1 },
-      { key: 'recommend_feedback', title: '  본 교육과정 추천 시 추천 사유', idPrefix: 'commRec', defaultCount: 3 },
-      { key: 'additional_courses', title: '  추가로 개설이 되었으면 하는 과정 혹은 부문', idPrefix: 'commAdd', defaultCount: 1 }
+      { key: 'instructor_feedback', title: '강사님 관련 의견', idPrefix: 'commInst', defaultCount: 2 },
+      { key: 'content_feedback', title: '교육 내용 관련 의견', idPrefix: 'commContent', defaultCount: 1 },
+      { key: 'operation_feedback', title: '교육 신청에서 종료까지 교육 운영 관련 의견', idPrefix: 'commOper', defaultCount: 1 },
+      { key: 'recommend_feedback', title: '본 교육과정 추천 시 추천 사유', idPrefix: 'commRec', defaultCount: 3 },
+      { key: 'additional_courses', title: '추가로 개설이 되었으면 하는 과정 혹은 부문', idPrefix: 'commAdd', defaultCount: 1 }
     ];
 
     sections.forEach(sec => {
-      const items = comments[sec.key] || [];
-      const rowCount = Math.max(sec.defaultCount, items.length);
+      let items = comments[sec.key] || [];
+      if (items.length === 0) {
+        items = Array(sec.defaultCount).fill('');
+        comments[sec.key] = items;
+      }
+      const rowCount = items.length;
 
       for (let i = 0; i < rowCount; i++) {
         const tr = document.createElement('tr');
+        const deleteBtnHtml = `
+          <button type="button" onclick="removeCommentItem('${sec.key}', '', ${i})" class="text-slate-400 hover:text-rose-600 px-1.5 py-0.5 rounded transition text-xs ml-1 flex-shrink-0" title="이 항목 삭제">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        `;
+
         if (i === 0) {
+          const headerHtml = `
+            <div class="flex items-center justify-between px-1.5">
+              <span class="font-bold text-slate-800">${escapeHtml(sec.title)}</span>
+              <button type="button" onclick="addCommentItem('${sec.key}', '')" class="text-[11px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-2 py-0.5 rounded border border-slate-300 transition shadow-xs flex items-center" title="의견 칸 추가">
+                <i class="fa-solid fa-plus text-[10px] mr-1"></i>추가
+              </button>
+            </div>
+          `;
           tr.innerHTML = `
-            <td class="font-bold align-middle pl-3" style="width: 38%;" rowspan="${rowCount}">${escapeHtml(sec.title)}</td>
+            <td class="align-middle bg-slate-50/70 pl-2" style="width: 38%;" rowspan="${rowCount}">${headerHtml}</td>
             <td style="width: 62%;">
-              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-emerald-600 rounded" placeholder="의견을 입력하세요" />
+              <div class="flex items-center">
+                <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="flex-1 text-xs p-1 border-0 focus:ring-1 focus:ring-emerald-600 rounded" placeholder="의견을 입력하세요" />
+                ${deleteBtnHtml}
+              </div>
             </td>
           `;
         } else {
           tr.innerHTML = `
             <td>
-              <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="w-full text-xs p-1 border-0 focus:ring-1 focus:ring-emerald-600 rounded" placeholder="의견을 입력하세요" />
+              <div class="flex items-center">
+                <input type="text" id="${sec.idPrefix}${i}" value="${escapeHtml(items[i] || '')}" class="flex-1 text-xs p-1 border-0 focus:ring-1 focus:ring-emerald-600 rounded" placeholder="의견을 입력하세요" />
+                ${deleteBtnHtml}
+              </div>
             </td>
           `;
         }
@@ -549,48 +684,10 @@ function renderCommentsSection(sheet) {
 async function saveCurrentComments() {
   if (!currentReportData || !currentReportData.sheets) return;
   const sheet = currentReportData.sheets[currentSheetIndex];
+  if (!sheet) return;
 
-  const commentsObj = {};
-  if (currentMode === 'instructor') {
-    const instTexts = [];
-    const instSents = [];
-    const contTexts = [];
-    const contSents = [];
-    const recTexts = [];
-    const recSents = [];
-
-    for (let i = 0; i < 10; i++) {
-      const el = document.getElementById(`commInst${i}`);
-      if (!el) break;
-      instTexts.push(el.value.trim());
-      instSents.push(document.getElementById(`commInstSent${i}`)?.value || '긍정');
-    }
-    for (let i = 0; i < 10; i++) {
-      const el = document.getElementById(`commContent${i}`);
-      if (!el) break;
-      contTexts.push(el.value.trim());
-      contSents.push(document.getElementById(`commContentSent${i}`)?.value || '긍정');
-    }
-    for (let i = 0; i < 10; i++) {
-      const el = document.getElementById(`commRec${i}`);
-      if (!el) break;
-      recTexts.push(el.value.trim());
-      recSents.push(document.getElementById(`commRecSent${i}`)?.value || '긍정');
-    }
-
-    commentsObj.instructor_feedback = instTexts;
-    commentsObj.instructor_sentiment = instSents;
-    commentsObj.content_feedback = contTexts;
-    commentsObj.content_sentiment = contSents;
-    commentsObj.recommend_feedback = recTexts;
-    commentsObj.recommend_sentiment = recSents;
-  } else {
-    commentsObj.instructor_feedback = [0,1,2,3].map(i => document.getElementById(`commInst${i}`)?.value?.trim() || '').filter(Boolean);
-    commentsObj.content_feedback = [0,1,2,3].map(i => document.getElementById(`commContent${i}`)?.value?.trim() || '').filter(Boolean);
-    commentsObj.operation_feedback = [0,1,2,3].map(i => document.getElementById(`commOper${i}`)?.value?.trim() || '').filter(Boolean);
-    commentsObj.recommend_feedback = [0,1,2,3].map(i => document.getElementById(`commRec${i}`)?.value?.trim() || '').filter(Boolean);
-    commentsObj.additional_courses = [0,1,2,3].map(i => document.getElementById(`commAdd${i}`)?.value?.trim() || '').filter(Boolean);
-  }
+  syncInputsToComments();
+  const commentsObj = sheet.comments || {};
 
   try {
     if (isServerAvailable) {
@@ -604,12 +701,12 @@ async function saveCurrentComments() {
       });
       if (!res.ok) throw new Error('저장 실패');
     } else if (window.clientEngine) {
-      window.clientEngine.saveComments(sheet.comment_key, commentsObj);
+      await window.clientEngine.saveComments(sheet.comment_key, commentsObj);
     }
     
-    sheet.comments = commentsObj;
-    showToast('주관식 의견이 성공적으로 저장되었습니다!');
+    showToast('주관식 의견이 성공적으로 저장 및 연동되었습니다!');
   } catch (err) {
+    console.error('Comments save error:', err);
     showToast('주관식 의견 저장 중 오류가 발생했습니다.', 'error');
   }
 }
@@ -731,8 +828,11 @@ function initUploadModal() {
   async function handleFileUpload(file) {
     if (!file) return;
 
+    const isReplace = document.getElementById('uploadModeReplace')?.checked ?? true;
+    const modeText = isReplace ? '전체 교체' : '데이터 누적';
+
     statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-blue-50 text-blue-700 flex items-center';
-    statusDiv.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-2"></i> [${escapeHtml(file.name)}] 파싱 및 데이터 누적 중...`;
+    statusDiv.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-2"></i> [${escapeHtml(file.name)}] 파싱 및 ${modeText} 진행 중...`;
     statusDiv.classList.remove('hidden');
 
     try {
@@ -743,6 +843,7 @@ function initUploadModal() {
         // 서버 모드: FastAPI /api/upload
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('replace_mode', isReplace ? 'true' : 'false');
         const res = await fetch('/api/upload', { method: 'POST', body: formData });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || '업로드 실패');
@@ -755,14 +856,15 @@ function initUploadModal() {
         if (!window.clientEngine) {
           throw new Error('클라이언트 엔진을 찾을 수 없습니다.');
         }
-        importedCount = await window.clientEngine.parseAndMergeExcel(file);
+        importedCount = await window.clientEngine.parseAndMergeExcel(file, isReplace);
         filterOptions = window.clientEngine.getFilterOptions();
         totalRecords = filterOptions.total_records;
         document.getElementById('recordCount').textContent = totalRecords.toLocaleString();
       }
 
       statusDiv.className = 'text-xs p-2.5 rounded font-medium bg-emerald-50 text-emerald-800 flex items-center';
-      statusDiv.innerHTML = `<i class="fa-solid fa-circle-check mr-2"></i> 성공: <b>${importedCount.toLocaleString()}건</b>의 데이터가 누적되었습니다! (총 ${totalRecords.toLocaleString()}건)`;
+      const actionText = isReplace ? '전체 교체' : '누적';
+      statusDiv.innerHTML = `<i class="fa-solid fa-circle-check mr-2"></i> 성공: <b>${importedCount.toLocaleString()}건</b>의 데이터가 ${actionText}되었습니다! (총 ${totalRecords.toLocaleString()}건)`;
 
       showToast(`새 로우데이터가 성공적으로 반영되었습니다! (총 ${totalRecords.toLocaleString()}건)`);
 

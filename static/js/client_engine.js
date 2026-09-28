@@ -224,26 +224,46 @@ class ClientEngine {
         });
       });
 
+      // 복수 강사 시 공통 설문 데이터 중복 합산 방지 -> 대표 레코드 사용
+      const primaryRec = roundItem.records[0] || {};
       const compKeys = ["정보", "절차", "운영", "환경", "일정", "기타"];
-      const compVals = compKeys.map(k => roundItem.records.reduce((s, r) => s + (r.complaints?.[k] || 0), 0));
+      const compVals = compKeys.map(k => primaryRec.complaints?.[k] || 0);
 
       const formKeys = ["오프라인", "비대면", "이러닝", "플립러닝"];
-      const formVals = formKeys.map(k => roundItem.records.reduce((s, r) => s + (r.preferred_formats?.[k] || 0), 0));
+      const formVals = formKeys.map(k => primaryRec.preferred_formats?.[k] || 0);
 
       const posKeys = ["사원", "대리", "과장", "차장", "부팀장", "임원"];
-      const posVals = posKeys.map(k => roundItem.records.reduce((s, r) => s + (r.positions?.[k] || 0), 0));
+      const posVals = posKeys.map(k => primaryRec.positions?.[k] || 0);
 
       const motKeys = ["SNS", "이메일", "홈페이지", "인쇄물", "인터넷", "담당자추천", "동료추천", "기타"];
-      const motVals = motKeys.map(k => roundItem.records.reduce((s, r) => s + (r.motives?.[k] || 0), 0));
+      const motVals = motKeys.map(k => primaryRec.motives?.[k] || 0);
 
       const commentKey = `${courseName}_${roundItem.schedule_raw}_${instructorName || 'all'}`;
-      const roundComments = this.comments[commentKey] || {
-        instructor_feedback: [],
-        content_feedback: [],
-        operation_feedback: [],
-        recommend_feedback: [],
-        additional_courses: []
-      };
+      let roundComments = this.comments[commentKey];
+
+      // 주관식 공통 의견 자동 연동 (내용의견, 추천사유 상호 참조)
+      const altKey = instructorName ? `${courseName}_${roundItem.schedule_raw}_all` : (roundItem.records[0] ? `${courseName}_${roundItem.schedule_raw}_${roundItem.records[0].instructor_name}` : null);
+      const altComments = altKey ? this.comments[altKey] : null;
+
+      if (!roundComments) {
+        roundComments = {
+          instructor_feedback: altComments?.instructor_feedback ? [...altComments.instructor_feedback] : [],
+          content_feedback: altComments?.content_feedback ? [...altComments.content_feedback] : [],
+          operation_feedback: altComments?.operation_feedback ? [...altComments.operation_feedback] : [],
+          recommend_feedback: altComments?.recommend_feedback ? [...altComments.recommend_feedback] : [],
+          additional_courses: altComments?.additional_courses ? [...altComments.additional_courses] : [],
+          instructor_sentiment: altComments?.instructor_sentiment ? [...altComments.instructor_sentiment] : [],
+          content_sentiment: altComments?.content_sentiment ? [...altComments.content_sentiment] : [],
+          recommend_sentiment: altComments?.recommend_sentiment ? [...altComments.recommend_sentiment] : []
+        };
+      } else if (altComments) {
+        if ((!roundComments.content_feedback || roundComments.content_feedback.length === 0) && altComments.content_feedback?.length) {
+          roundComments.content_feedback = [...altComments.content_feedback];
+        }
+        if ((!roundComments.recommend_feedback || roundComments.recommend_feedback.length === 0) && altComments.recommend_feedback?.length) {
+          roundComments.recommend_feedback = [...altComments.recommend_feedback];
+        }
+      }
 
       let sheetTitle = roundItem.month ? `${roundItem.month}월` : `${idx+1}차`;
       const existingTitles = sheetDataList.map(s => s.sheet_title);
@@ -281,6 +301,37 @@ class ClientEngine {
 
   async saveComments(commentKey, commentsObj) {
     this.comments[commentKey] = commentsObj;
+
+    // 양방향 동기화: 공통 의견(교육내용, 추천사유) 자동 연동
+    const parts = commentKey.split('_');
+    if (parts.length >= 3) {
+      const target = parts[parts.length - 1];
+      const prefix = parts.slice(0, parts.length - 1).join('_');
+
+      if (target === 'all') {
+        for (const k in this.comments) {
+          if (k.startsWith(prefix + '_') && k !== commentKey) {
+            this.comments[k] = this.comments[k] || {};
+            if (commentsObj.content_feedback?.length) {
+              this.comments[k].content_feedback = [...commentsObj.content_feedback];
+            }
+            if (commentsObj.recommend_feedback?.length) {
+              this.comments[k].recommend_feedback = [...commentsObj.recommend_feedback];
+            }
+          }
+        }
+      } else {
+        const allKey = `${prefix}_all`;
+        this.comments[allKey] = this.comments[allKey] || {};
+        if (commentsObj.content_feedback?.length) {
+          this.comments[allKey].content_feedback = [...commentsObj.content_feedback];
+        }
+        if (commentsObj.recommend_feedback?.length) {
+          this.comments[allKey].recommend_feedback = [...commentsObj.recommend_feedback];
+        }
+      }
+    }
+
     await this.saveToDB('custom_comments', this.comments);
   }
 
@@ -291,7 +342,7 @@ class ClientEngine {
   }
 
   // 지능형 엑셀 파일 파싱 및 병합 (지능형 헤더 감지)
-  async parseAndMergeExcel(file) {
+  async parseAndMergeExcel(file, replaceMode = false) {
     if (!window.XLSX) {
       throw new Error('SheetJS(XLSX) 라이브러리가 로드되지 않았습니다.');
     }
@@ -337,7 +388,11 @@ class ClientEngine {
 
           const headerRow = rows[headerRowIdx].map(c => String(c || '').trim());
           headerRow.forEach((colName, idx) => {
-            if (colName) colMap[colName] = idx;
+            let name = colName;
+            if (!name && headerRowIdx > 0) {
+              name = String(rows[headerRowIdx - 1]?.[idx] || '').trim();
+            }
+            if (name) colMap[name] = idx;
           });
 
           // 컬럼 인덱스 헬퍼
@@ -375,7 +430,12 @@ class ClientEngine {
 
             const schedRaw = String(row[idxSched] || '').trim();
             const region = String(row[idxRegion] || '').trim();
-            const instName = String(row[idxInst] || '').trim();
+            let instName = String(row[idxInst] || '').trim();
+
+            // 강사명에 날짜 형식(YYYY-MM-DD 등)이나 엑셀 시리얼 번호가 잘못 유입된 경우 정제
+            if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(instName) || this.excelSerialToDateString(instName)) {
+              instName = '';
+            }
 
             const parsedSched = this.parseSchedule(schedRaw);
 
@@ -438,13 +498,27 @@ class ClientEngine {
             throw new Error('유효한 데이터 행을 추출하지 못했습니다. 파일 구조를 확인해 주세요.');
           }
 
-          // 기존 추가 레코드와 병합
-          const existingExtra = (await this.getFromDB('custom_records')) || [];
-          const recordMap = new Map();
-          existingExtra.forEach(r => recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r));
-          newRecords.forEach(r => recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r));
+          // 정규화된 키 기반 중복 제거 및 Upsert
+          const getNormKey = (r) => {
+            const c = (r.course_name || '').trim().replace(/\s+/g, ' ');
+            const d = (r.start_date || r.schedule_raw || '').trim();
+            const i = (r.instructor_name || '').trim();
+            return `${c}_${d}_${i}`;
+          };
 
-          const mergedExtra = Array.from(recordMap.values());
+          let mergedExtra = [];
+          if (replaceMode) {
+            const recordMap = new Map();
+            newRecords.forEach(r => recordMap.set(getNormKey(r), r));
+            mergedExtra = Array.from(recordMap.values());
+          } else {
+            const existingExtra = (await this.getFromDB('custom_records')) || [];
+            const recordMap = new Map();
+            existingExtra.forEach(r => recordMap.set(getNormKey(r), r));
+            newRecords.forEach(r => recordMap.set(getNormKey(r), r));
+            mergedExtra = Array.from(recordMap.values());
+          }
+
           await this.saveToDB('custom_records', mergedExtra);
 
           // 메모리 상태 재동기화
@@ -460,21 +534,67 @@ class ClientEngine {
     });
   }
 
+  excelSerialToDateString(serial) {
+    if (!serial) return '';
+    const num = parseFloat(serial);
+    if (!isNaN(num) && num >= 20000 && num <= 65000) {
+      const utcDays = Math.floor(num - 25569);
+      const utcValue = utcDays * 86400;
+      const dateInfo = new Date(utcValue * 1000);
+      const year = dateInfo.getUTCFullYear();
+      const month = String(dateInfo.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(dateInfo.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    return '';
+  }
+
   parseSchedule(s) {
     if (!s) return { start_date: '', end_date: '', month: 0, round_name: '', display_period: '' };
-    const m = s.match(/\[\s*(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})\s*\]\s*(.*)/);
+    const str = String(s).trim();
+
+    // 1. 단독 시리얼 번호인 경우 (예: "46104" 또는 46104)
+    const serialDate = this.excelSerialToDateString(str);
+    if (serialDate) {
+      const month = parseInt(serialDate.split('-')[1]);
+      return { start_date: serialDate, end_date: serialDate, month, round_name: '', display_period: serialDate };
+    }
+
+    // 2. [시리얼 ~ 시리얼] N차 형태
+    const mSerial = str.match(/\[\s*(\d{5}(?:\.\d+)?)\s*~\s*(\d{5}(?:\.\d+)?)\s*\]\s*(.*)/);
+    if (mSerial) {
+      const [_, s1, s2, round_name] = mSerial;
+      const d1 = this.excelSerialToDateString(s1) || s1;
+      const d2 = this.excelSerialToDateString(s2) || s2;
+      const month = d1.includes('-') ? parseInt(d1.split('-')[1]) : 0;
+      return { start_date: d1, end_date: d2, month, round_name: (round_name || '').trim(), display_period: `${d1} ~ ${d2}` };
+    }
+
+    // 3. [YYYY-MM-DD ~ YYYY-MM-DD] N차 또는 제N차 파싱
+    const m = str.match(/\[\s*(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})\s*\]\s*(.*)/);
     if (m) {
       const [_, start_date, end_date, round_name] = m;
       const month = parseInt(start_date.split('-')[1]);
       return { start_date, end_date, month, round_name: round_name.trim(), display_period: `${start_date} ~ ${end_date}` };
     }
-    const m2 = s.match(/(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
+
+    // 4. 일자만 있는 경우
+    const m2 = str.match(/(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})/);
     if (m2) {
       const [_, start_date, end_date] = m2;
       const month = parseInt(start_date.split('-')[1]);
       return { start_date, end_date, month, round_name: '', display_period: `${start_date} ~ ${end_date}` };
     }
-    return { start_date: '', end_date: '', month: 0, round_name: '', display_period: s };
+
+    // 5. YYYY-MM-DD 단독인 경우
+    const m3 = str.match(/(\d{4}-\d{2}-\d{2})/);
+    if (m3) {
+      const start_date = m3[1];
+      const month = parseInt(start_date.split('-')[1]);
+      return { start_date, end_date: start_date, month, round_name: '', display_period: start_date };
+    }
+
+    return { start_date: '', end_date: '', month: 0, round_name: '', display_period: str };
   }
 
   // Base64 to ArrayBuffer 헬퍼
@@ -671,6 +791,86 @@ class ClientEngine {
             sXml = this.setCellValue(sXml, 'I5', sdata.respondent_count || 0, false);
 
             const instructors = sdata.instructors || [];
+            const extraRows = (mode === 'course' && instructors.length > 1) ? (instructors.length - 1) * 2 : 0;
+            let dXml = baseDrawingXml;
+
+            if (extraRows > 0) {
+              // 1. 12행 이상의 모든 row 및 cell 좌표 시프트 (+ extraRows)
+              sXml = sXml.replace(/<c\s+r="([A-Z]+)(\d+)"/g, (match, col, rNum) => {
+                const n = parseInt(rNum);
+                return n >= 12 ? `<c r="${col}${n + extraRows}"` : match;
+              });
+
+              sXml = sXml.replace(/<row\s+r="(\d+)"/g, (match, rNum) => {
+                const n = parseInt(rNum);
+                return n >= 12 ? `<row r="${n + extraRows}"` : match;
+              });
+
+              sXml = sXml.replace(/<mergeCell\s+ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/g, (match, c1, r1, c2, r2) => {
+                const n1 = parseInt(r1);
+                const n2 = parseInt(r2);
+                const newR1 = n1 >= 12 ? n1 + extraRows : n1;
+                const newR2 = n2 >= 12 ? n2 + extraRows : n2;
+                return `<mergeCell ref="${c1}${newR1}:${c2}${newR2}"/>`;
+              });
+
+              // 2. 추가 강사 행 (12, 13, 14, 15 ...) 생성
+              const newRowsXml = [];
+              const newMergeCells = [];
+              for (let k = 1; k < instructors.length; k++) {
+                const rTop = 10 + k * 2;
+                const rBot = 11 + k * 2;
+                const instK = instructors[k];
+                const curK = instK.current || {};
+                const cumK = instK.cumulative || {};
+                const nameStr = this.escapeXml(instK.instructor_name || '');
+                const currStr = this.escapeXml(instK.curriculum || '');
+                const hoursVal = this.escapeXml(instK.hours || '');
+
+                const rTopXml = `<row r="${rTop}" spans="2:9" ht="67.5" customHeight="1" x14ac:dyDescent="0.3">` +
+                  `<c r="B${rTop}" s="10" t="inlineStr"><is><t>${nameStr}</t></is></c>` +
+                  `<c r="C${rTop}" s="40" t="inlineStr"><is><t>${currStr}</t></is></c>` +
+                  `<c r="D${rTop}" s="41"/>` +
+                  `<c r="E${rTop}" s="11" t="inlineStr"><is><t>이번&#10;차수</t></is></c>` +
+                  `<c r="F${rTop}" s="12"><v>${Number(curK.teaching_expertise || 0).toFixed(1)}</v></c>` +
+                  `<c r="G${rTop}" s="12"><v>${Number(curK.delivery_skill || 0).toFixed(1)}</v></c>` +
+                  `<c r="H${rTop}" s="12"><v>${Number(curK.practical_use || 0).toFixed(1)}</v></c>` +
+                  `<c r="I${rTop}" s="13"><v>${Number(curK.textbook_quality || 0).toFixed(1)}</v></c>` +
+                  `</row>`;
+
+                const rBotXml = `<row r="${rBot}" spans="2:9" ht="67.5" customHeight="1" x14ac:dyDescent="0.3">` +
+                  `<c r="B${rBot}" s="14" t="inlineStr"><is><t>${hoursVal}</t></is></c>` +
+                  `<c r="C${rBot}" s="42"/>` +
+                  `<c r="D${rBot}" s="43"/>` +
+                  `<c r="E${rBot}" s="11" t="inlineStr"><is><t>누적&#10;평균</t></is></c>` +
+                  `<c r="F${rBot}" s="12"><v>${Number(cumK.teaching_expertise || 0).toFixed(1)}</v></c>` +
+                  `<c r="G${rBot}" s="12"><v>${Number(cumK.delivery_skill || 0).toFixed(1)}</v></c>` +
+                  `<c r="H${rBot}" s="12"><v>${Number(cumK.practical_use || 0).toFixed(1)}</v></c>` +
+                  `<c r="I${rBot}" s="13"><v>${Number(cumK.textbook_quality || 0).toFixed(1)}</v></c>` +
+                  `</row>`;
+
+                newRowsXml.push(rTopXml + rBotXml);
+                newMergeCells.push(`<mergeCell ref="C${rTop}:D${rBot}"/>`);
+              }
+
+              // 11행 끝난 직후 삽입
+              sXml = sXml.replace(/(<row\s+r="11"[^>]*>.*?<\/row>)/s, `$1${newRowsXml.join('')}`);
+
+              // mergeCells 추가
+              if (newMergeCells.length > 0) {
+                sXml = sXml.replace(/<mergeCells\s+count="(\d+)">/, (match, count) => {
+                  const cnt = parseInt(count) + newMergeCells.length;
+                  return `<mergeCells count="${cnt}">${newMergeCells.join('')}`;
+                });
+              }
+
+              // drawing1.xml 차트 앵커 시프트
+              dXml = dXml.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (match, rNum) => {
+                const n = parseInt(rNum);
+                return n >= 11 ? `<xdr:row>${n + extraRows}</xdr:row>` : match;
+              });
+            }
+
             if (instructors.length > 0) {
               const inst0 = instructors[0];
               sXml = this.setCellValue(sXml, 'B10', inst0.instructor_name || '', true);
@@ -740,14 +940,14 @@ class ClientEngine {
               const operF = comments.operation_feedback || [];
               const recF = comments.recommend_feedback || [];
               const addF = comments.additional_courses || [];
-              sXml = this.setCellValue(sXml, 'E61', instF[0] || '', true);
-              sXml = this.setCellValue(sXml, 'E62', instF[1] || '', true);
-              sXml = this.setCellValue(sXml, 'E63', contF[0] || '', true);
-              sXml = this.setCellValue(sXml, 'E64', operF[0] || '', true);
-              sXml = this.setCellValue(sXml, 'E65', recF[0] || '', true);
-              sXml = this.setCellValue(sXml, 'E66', recF[1] || '', true);
-              sXml = this.setCellValue(sXml, 'E67', recF[2] || '', true);
-              sXml = this.setCellValue(sXml, 'E68', addF[0] || '', true);
+              sXml = this.setCellValue(sXml, `E${61 + extraRows}`, instF[0] || '', true);
+              sXml = this.setCellValue(sXml, `E${62 + extraRows}`, instF[1] || '', true);
+              sXml = this.setCellValue(sXml, `E${63 + extraRows}`, contF[0] || '', true);
+              sXml = this.setCellValue(sXml, `E${64 + extraRows}`, operF[0] || '', true);
+              sXml = this.setCellValue(sXml, `E${65 + extraRows}`, recF[0] || '', true);
+              sXml = this.setCellValue(sXml, `E${66 + extraRows}`, recF[1] || '', true);
+              sXml = this.setCellValue(sXml, `E${67 + extraRows}`, recF[2] || '', true);
+              sXml = this.setCellValue(sXml, `E${68 + extraRows}`, addF[0] || '', true);
             }
 
             zip.file(`xl/worksheets/sheet${sheetNum}.xml`, sXml);
@@ -757,7 +957,7 @@ class ClientEngine {
             zip.file(`xl/worksheets/_rels/sheet${sheetNum}.xml.rels`, sRels);
 
             // 3. Drawing XML
-            zip.file(`xl/drawings/drawing${drawingNum}.xml`, baseDrawingXml);
+            zip.file(`xl/drawings/drawing${drawingNum}.xml`, dXml);
 
             // 4. Drawing Rels
             let dRels = baseDrawingRels;

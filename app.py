@@ -96,7 +96,10 @@ async def update_curriculum(req: CurriculumUpdateRequest):
 
 
 @app.post("/api/upload")
-async def upload_raw_data(file: UploadFile = File(...)):
+async def upload_raw_data(
+    file: UploadFile = File(...),
+    replace_mode: Optional[str] = Form("true")
+):
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="엑셀 파일(.xlsx, .xls)만 업로드할 수 있습니다.")
 
@@ -105,10 +108,12 @@ async def upload_raw_data(file: UploadFile = File(...)):
         with open(save_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        imported_count = data_manager.import_raw_excel(save_path)
+        is_replace = (replace_mode == "true" or replace_mode == "replace")
+        imported_count = data_manager.import_raw_excel(save_path, replace=is_replace)
+        action_msg = "전체 교체" if is_replace else "반영/누적"
         return {
             "status": "success",
-            "message": f"성공적으로 {imported_count}건의 로우데이터를 반영/누적하였습니다.",
+            "message": f"성공적으로 {imported_count}건의 로우데이터를 {action_msg}하였습니다.",
             "total_records": len(data_manager.records)
         }
     except Exception as e:

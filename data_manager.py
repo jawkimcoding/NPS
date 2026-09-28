@@ -13,14 +13,62 @@ CURRICULUM_STORE_PATH = os.path.join(DATA_DIR, "curriculum_store.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 
+from datetime import datetime, timedelta
+
+
+def excel_serial_to_date_string(serial) -> str:
+    """엑셀 시리얼 번호(예: 46104)를 YYYY-MM-DD 문자열로 변환"""
+    try:
+        val = float(serial)
+        if 20000 <= val <= 65000:
+            d = datetime(1899, 12, 30) + timedelta(days=val)
+            return d.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        pass
+    return ""
+
+
 def parse_schedule(schedule_raw: str):
     """
     [YYYY-MM-DD ~ YYYY-MM-DD] N차 또는 제N차 파싱
+    엑셀 시리얼 번호(46104, 46230, 46286 등) 자동 변환 지원
     """
     if not schedule_raw:
         return {"raw": "", "start_date": "", "end_date": "", "month": 0, "round_name": "", "display_period": ""}
     
     s = str(schedule_raw).strip()
+
+    # 1. 엑셀 시리얼 번호 단독인 경우 (예: "46104" 또는 "46104.0")
+    serial_date = excel_serial_to_date_string(s)
+    if serial_date:
+        month = int(serial_date.split('-')[1])
+        return {
+            "raw": s,
+            "start_date": serial_date,
+            "end_date": serial_date,
+            "month": month,
+            "round_name": "",
+            "display_period": serial_date
+        }
+
+    # 2. [시리얼 ~ 시리얼] N차 형태
+    m_serial = re.search(r'\[\s*(\d{5}(?:\.\d+)?)\s*~\s*(\d{5}(?:\.\d+)?)\s*\]\s*(.*)', s)
+    if m_serial:
+        s1, s2, round_name = m_serial.groups()
+        d1 = excel_serial_to_date_string(s1) or s1
+        d2 = excel_serial_to_date_string(s2) or s2
+        round_name = round_name.strip()
+        month = int(d1.split('-')[1]) if '-' in d1 else 0
+        return {
+            "raw": s,
+            "start_date": d1,
+            "end_date": d2,
+            "month": month,
+            "round_name": round_name,
+            "display_period": f"{d1} ~ {d2}"
+        }
+
+    # 3. [YYYY-MM-DD ~ YYYY-MM-DD] N차 또는 제N차 파싱
     m = re.search(r'\[\s*(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})\s*\]\s*(.*)', s)
     if m:
         start_date, end_date, round_name = m.groups()
@@ -35,7 +83,7 @@ def parse_schedule(schedule_raw: str):
             "display_period": f"{start_date} ~ {end_date}"
         }
     
-    # 일자만 있는 경우
+    # 4. 일자만 있는 경우
     m2 = re.search(r'(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})', s)
     if m2:
         start_date, end_date = m2.groups()
@@ -47,6 +95,20 @@ def parse_schedule(schedule_raw: str):
             "month": month,
             "round_name": "",
             "display_period": f"{start_date} ~ {end_date}"
+        }
+
+    # 5. YYYY-MM-DD 단독인 경우
+    m3 = re.search(r'(\d{4}-\d{2}-\d{2})', s)
+    if m3:
+        d = m3.group(1)
+        month = int(d.split('-')[1])
+        return {
+            "raw": s,
+            "start_date": d,
+            "end_date": d,
+            "month": month,
+            "round_name": "",
+            "display_period": d
         }
     
     return {"raw": s, "start_date": "", "end_date": "", "month": 0, "round_name": "", "display_period": s}
@@ -123,8 +185,8 @@ class DataManager:
         with open(CURRICULUM_STORE_PATH, "w", encoding="utf-8") as f:
             json.dump(self.curriculums, f, ensure_ascii=False, indent=2)
 
-    def import_raw_excel(self, file_path: str) -> int:
-        """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장 (지능형 헤더 감지)"""
+    def import_raw_excel(self, file_path: str, replace: bool = False) -> int:
+        """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장 (지능형 헤더 감지, replace 모드 지원)"""
         wb = openpyxl.load_workbook(file_path, data_only=True)
         ws = wb.active
 
@@ -168,9 +230,12 @@ class DataManager:
         c_practical = get_col(['교육효과성', '실무활용도'], 13)
         c_textbook = get_col(['교재완성도'], 14)
 
+        if replace:
+            self.records = []
+
         imported_count = 0
         existing_keys = {
-            f"{r.get('course_name')}_{r.get('schedule_raw')}_{r.get('instructor_name')}": idx 
+            f"{r.get('course_name')}_{r.get('start_date') or r.get('schedule_raw')}_{r.get('instructor_name')}": idx 
             for idx, r in enumerate(self.records)
         }
 
@@ -183,6 +248,9 @@ class DataManager:
             schedule_raw = str(ws.cell(row_idx, c_sched).value or "").strip()
             region = str(ws.cell(row_idx, c_region).value or "").strip()
             instructor_name = str(ws.cell(row_idx, c_inst).value or "").strip()
+            # 강사명에 날짜 형식(YYYY-MM-DD 등)이나 엑셀 시리얼 번호가 잘못 유입된 경우 정제
+            if re.search(r'^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$', instructor_name) or excel_serial_to_date_string(instructor_name):
+                instructor_name = ""
             
             sched_info = parse_schedule(schedule_raw)
 
@@ -243,7 +311,7 @@ class DataManager:
                 "instructor_code": str(ws.cell(row_idx, 41).value or ""),
             }
 
-            key = f"{course_name}_{schedule_raw}_{instructor_name}"
+            key = f"{course_name}_{sched_info['start_date'] or schedule_raw}_{instructor_name}"
             if key in existing_keys:
                 self.records[existing_keys[key]] = record
             else:
@@ -409,22 +477,24 @@ class DataManager:
                 "values": list(trend_history["nps"])
             }
             
-            # 차트 2~5: 해당 차수의 합계 (복수 레코드일 경우 합산 혹은 대표)
+            # 차트 2~5: 해당 차수의 공통 설문 데이터 (동일 차수 복수 강사 시 중복 합산 방지 -> 대표 레코드 사용)
+            primary_rec = round_item["records"][0] if round_item["records"] else {}
+
             # 불편요소
             comp_keys = ["정보", "절차", "운영", "환경", "일정", "기타"]
-            comp_vals = [sum(r["complaints"].get(k, 0) for r in round_item["records"]) for k in comp_keys]
+            comp_vals = [primary_rec.get("complaints", {}).get(k, 0) for k in comp_keys]
             
             # 희망 형태
             form_keys = ["오프라인", "비대면", "이러닝", "플립러닝"]
-            form_vals = [sum(r["preferred_formats"].get(k, 0) for r in round_item["records"]) for k in form_keys]
+            form_vals = [primary_rec.get("preferred_formats", {}).get(k, 0) for k in form_keys]
 
             # 직급
             pos_keys = ["사원", "대리", "과장", "차장", "부팀장", "임원"]
-            pos_vals = [sum(r["positions"].get(k, 0) for r in round_item["records"]) for k in pos_keys]
+            pos_vals = [primary_rec.get("positions", {}).get(k, 0) for k in pos_keys]
 
             # 수강동기 (과정정보 출처)
             mot_keys = ["SNS", "이메일", "홈페이지", "인쇄물", "인터넷", "담당자추천", "동료추천", "기타"]
-            mot_vals = [sum(r["motives"].get(k, 0) for r in round_item["records"]) for k in mot_keys]
+            mot_vals = [primary_rec.get("motives", {}).get(k, 0) for k in mot_keys]
 
             # 주관식 코멘트 가져오기
             comment_key = f"{course_name}_{round_item['schedule_raw']}_{instructor_name or 'all'}"
