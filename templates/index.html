@@ -459,6 +459,63 @@
     </div>
   </div>
 
+  <!-- 데이터 초기화 및 삭제 선택 모달 (no-print) -->
+  <div id="resetConfirmModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-300">
+      <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+        <h3 class="text-sm font-bold text-slate-900 flex items-center">
+          <i class="fa-solid fa-triangle-exclamation text-amber-500 mr-2"></i> 데이터 초기화 및 삭제
+        </h3>
+        <button id="btnCloseResetModal" class="text-slate-400 hover:text-slate-600">
+          <i class="fa-solid fa-xmark text-base"></i>
+        </button>
+      </div>
+
+      <p class="text-xs text-slate-600 leading-relaxed">
+        데이터를 비우거나 초기 샘플 데이터로 복원할 수 있습니다. 원하시는 작업을 선택해 주세요:
+      </p>
+
+      <div class="space-y-3">
+        <!-- 1. 모든 데이터 완전 삭제 (0건) -->
+        <button id="btnActionClearAll" type="button" class="w-full text-left p-3.5 rounded-lg border-2 border-red-200 bg-red-50 hover:bg-red-100 hover:border-red-300 transition flex items-start space-x-3 group">
+          <div class="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+            <i class="fa-solid fa-trash-can text-sm"></i>
+          </div>
+          <div>
+            <div class="text-xs font-bold text-red-700 group-hover:text-red-800 flex items-center">
+              <span>모든 데이터 완전 삭제 (0건으로 비우기)</span>
+              <span class="ml-2 px-1.5 py-0.5 text-[10px] bg-red-200 text-red-800 rounded font-semibold">0건으로 초기화</span>
+            </div>
+            <div class="text-[11px] text-red-600/90 mt-1 leading-snug">
+              기본 870건 및 업로드된 모든 설문 데이터를 완전히 지우고 깨끗한 <b>0건 빈 상태</b>로 만듭니다. 새 엑셀만 업로드하여 대시보드를 사용할 때 적합합니다.
+            </div>
+          </div>
+        </button>
+
+        <!-- 2. 기본 샘플 데이터 복원 (870건) -->
+        <button id="btnActionRestoreDefault" type="button" class="w-full text-left p-3.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition flex items-start space-x-3 group">
+          <div class="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
+            <i class="fa-solid fa-rotate-left text-sm"></i>
+          </div>
+          <div>
+            <div class="text-xs font-bold text-blue-700 group-hover:text-blue-800 flex items-center">
+              <span>기본 샘플 데이터 복원 (870건)</span>
+            </div>
+            <div class="text-[11px] text-blue-600/90 mt-1 leading-snug">
+              처음 제공된 KPC 기본 샘플 데이터(870건) 상태로 다시 되돌립니다.
+            </div>
+          </div>
+        </button>
+      </div>
+
+      <div class="flex justify-end pt-3 border-t border-slate-200">
+        <button id="btnCancelResetModal" type="button" class="px-4 py-1.5 rounded text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-300">
+          닫기
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- 토스트 알림 메시지 -->
   <div id="toastMessage" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition duration-300 pointer-events-none bg-slate-900 text-white px-4 py-2.5 rounded shadow-xl flex items-center space-x-2 text-xs font-medium">
     <i id="toastIcon" class="fa-solid fa-circle-check text-emerald-400"></i>

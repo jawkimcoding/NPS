@@ -109,8 +109,19 @@ function initUIEvents() {
 
   // 상단 네비게이션 데이터 초기화 버튼
   if (btnResetNav) {
-    btnResetNav.addEventListener('click', handleResetData);
+    btnResetNav.addEventListener('click', openResetModal);
   }
+
+  // 데이터 초기화 모달 이벤트 연결
+  const btnCloseReset = document.getElementById('btnCloseResetModal');
+  const btnCancelReset = document.getElementById('btnCancelResetModal');
+  const btnClearAll = document.getElementById('btnActionClearAll');
+  const btnRestoreDefault = document.getElementById('btnActionRestoreDefault');
+
+  if (btnCloseReset) btnCloseReset.addEventListener('click', closeResetModal);
+  if (btnCancelReset) btnCancelReset.addEventListener('click', closeResetModal);
+  if (btnClearAll) btnClearAll.addEventListener('click', handleClearAllData);
+  if (btnRestoreDefault) btnRestoreDefault.addEventListener('click', handleRestoreDefaultData);
 
   // 현재 과정 삭제 버튼
   if (btnDeleteCourse) {
@@ -813,7 +824,7 @@ function initUploadModal() {
 
   const btnResetUploaded = document.getElementById('btnResetUploadedData');
   if (btnResetUploaded) {
-    btnResetUploaded.addEventListener('click', handleResetData);
+    btnResetUploaded.addEventListener('click', openResetModal);
   }
 
   const closeModal = () => {
@@ -962,14 +973,77 @@ function escapeQuotes(str) {
   return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
-// 업로드된 데이터 초기화 (기본 내장 데이터로 복원)
-async function handleResetData() {
+// 데이터 초기화 모달 열기/닫기
+function openResetModal() {
+  const modal = document.getElementById('resetConfirmModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeResetModal() {
+  const modal = document.getElementById('resetConfirmModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// 화면 UI 깨끗하게 리셋
+function resetDashboardUI() {
+  document.getElementById('courseSearchInput').value = '';
+  document.getElementById('btnClearSearch').classList.add('hidden');
+  document.getElementById('courseDropdown').classList.add('hidden');
+  document.getElementById('instructorSelect').innerHTML = '<option value="">강사를 선택하세요</option>';
+  const btnDel = document.getElementById('btnDeleteCurrentCourse');
+  if (btnDel) btnDel.classList.add('hidden');
+
+  currentReportData = null;
+  currentSheetIndex = 0;
+  document.getElementById('emptyState').classList.remove('hidden');
+  document.getElementById('reportPaper').classList.add('hidden');
+
+  const uploadModal = document.getElementById('uploadModal');
+  if (uploadModal) uploadModal.classList.add('hidden');
+}
+
+// 1. 모든 데이터 완전 삭제 (0건으로 비우기)
+async function handleClearAllData() {
   const confirmed = confirm(
-    '업로드된 추가 데이터를 모두 삭제하고 초기 기본 상태(870건)로 복원하시겠습니까?\n\n' +
-    '이 작업은 취소할 수 없으며 기본 내장 설문 데이터로 되돌아갑니다.'
+    '정말로 모든 설문 데이터를 완전히 삭제하시겠습니까?\n\n' +
+    '• 기본 870건 및 업로드된 모든 설문 데이터가 영구 삭제됩니다.\n' +
+    '• 총 데이터 건수가 0건이 되며, 새로운 엑셀 파일만 업로드하여 깨끗하게 사용하실 수 있습니다.'
   );
   if (!confirmed) return;
 
+  closeResetModal();
+  showLoading(true);
+  try {
+    let totalCount = 0;
+    if (isServerAvailable) {
+      const res = await fetch('/api/clear-data', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || '데이터 삭제 실패');
+      totalCount = data.total_records || 0;
+    } else if (window.clientEngine) {
+      totalCount = await window.clientEngine.clearAllData();
+    }
+
+    await checkServerAndLoadData();
+    resetDashboardUI();
+    showToast('모든 설문 데이터가 완전히 삭제되었습니다. (0건)');
+  } catch (err) {
+    console.error('Clear all data error:', err);
+    showToast(err.message || '데이터 삭제 중 오류가 발생했습니다.', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+// 2. 기본 샘플 데이터 복원 (870건)
+async function handleRestoreDefaultData() {
+  const confirmed = confirm(
+    '기본 샘플 데이터(870건) 상태로 다시 복원하시겠습니까?\n\n' +
+    '• 업로드된 데이터는 초기화되고 시스템 기본 내장 샘플 데이터가 로드됩니다.'
+  );
+  if (!confirmed) return;
+
+  closeResetModal();
   showLoading(true);
   try {
     let totalCount = 0;
@@ -983,31 +1057,19 @@ async function handleResetData() {
     }
 
     await checkServerAndLoadData();
-
-    // 화면 상태 초기화
-    document.getElementById('courseSearchInput').value = '';
-    document.getElementById('btnClearSearch').classList.add('hidden');
-    document.getElementById('courseDropdown').classList.add('hidden');
-    document.getElementById('instructorSelect').innerHTML = '<option value="">강사를 선택하세요</option>';
-    const btnDel = document.getElementById('btnDeleteCurrentCourse');
-    if (btnDel) btnDel.classList.add('hidden');
-
-    currentReportData = null;
-    currentSheetIndex = 0;
-    document.getElementById('emptyState').classList.remove('hidden');
-    document.getElementById('reportPaper').classList.add('hidden');
-
-    // 모달 닫기
-    const modal = document.getElementById('uploadModal');
-    if (modal) modal.classList.add('hidden');
-
-    showToast(`데이터가 초기 기본 상태(${totalCount.toLocaleString()}건)로 복원되었습니다.`);
+    resetDashboardUI();
+    showToast(`기본 샘플 데이터(${totalCount.toLocaleString()}건)로 복원되었습니다.`);
   } catch (err) {
-    console.error('Reset data error:', err);
-    showToast(err.message || '데이터 초기화 중 오류가 발생했습니다.', 'error');
+    console.error('Restore default data error:', err);
+    showToast(err.message || '데이터 복원 중 오류가 발생했습니다.', 'error');
   } finally {
     showLoading(false);
   }
+}
+
+// 하위 호환
+function handleResetData() {
+  openResetModal();
 }
 
 // 현재 선택된 과정 데이터 삭제

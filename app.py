@@ -101,12 +101,23 @@ async def update_curriculum(req: CurriculumUpdateRequest):
 
 @app.post("/api/reset-data")
 async def reset_data():
-    """기본 원본 데이터로 초기화 (업로드 데이터 모두 삭제)"""
+    """기본 원본 데이터로 초기화 (870건 복원)"""
     count = data_manager.reset_to_default()
     return {
         "status": "success",
         "message": f"데이터가 초기 기본 상태({count}건)로 복원되었습니다.",
         "total_records": count
+    }
+
+
+@app.post("/api/clear-data")
+async def clear_data():
+    """모든 설문 데이터 완전 삭제 (0건으로 초기화)"""
+    count = data_manager.clear_all_records()
+    return {
+        "status": "success",
+        "message": f"모든 설문 데이터({count}건)가 완전히 삭제되었습니다.",
+        "total_records": 0
     }
 
 

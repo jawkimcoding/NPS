@@ -178,11 +178,17 @@ class ClientEngine {
     return this.records.length;
   }
 
-  // 전체 데이터 완전 비우기 (빈 상태)
+  // 전체 데이터 완전 비우기 (0건 상태)
   async clearAllData() {
-    const allCourses = Array.from(new Set((window.DEFAULT_SURVEY_RECORDS || []).map(r => r.course_name)));
+    const defaultCourses = (window.DEFAULT_SURVEY_RECORDS || []).map(r => r.course_name);
+    const currentCourses = (this.records || []).map(r => r.course_name);
+    const allCourses = Array.from(new Set([...defaultCourses, ...currentCourses]));
+    
     await this.saveToDB('deleted_courses', allCourses);
     await this.saveToDB('custom_records', []);
+    await this.saveToDB('custom_comments', {});
+    await this.saveToDB('custom_curriculums', {});
+    
     this.records = [];
     this.comments = {};
     this.curriculums = {};
@@ -793,6 +799,12 @@ class ClientEngine {
 
           let mergedExtra = [];
           if (replaceMode) {
+            // 기본 내장 870건 데이터 중 새 파일에 없는 과정들을 deleted_courses에 넣어 숨김 처리
+            const defaultCourses = (window.DEFAULT_SURVEY_RECORDS || []).map(r => r.course_name);
+            const newCourseNames = new Set(newRecords.map(r => r.course_name));
+            const coursesToHide = defaultCourses.filter(c => !newCourseNames.has(c));
+            await this.saveToDB('deleted_courses', coursesToHide);
+
             const recordMap = new Map();
             newRecords.forEach(r => recordMap.set(getNormKey(r), r));
             mergedExtra = Array.from(recordMap.values());
