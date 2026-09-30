@@ -186,49 +186,160 @@ class DataManager:
             json.dump(self.curriculums, f, ensure_ascii=False, indent=2)
 
     def import_raw_excel(self, file_path: str, replace: bool = False) -> int:
-        """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장 (지능형 헤더 감지, replace 모드 지원)"""
+        """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장 (지능형 복합 헤더 감지, 제외어 필터, 자가 치유)"""
         wb = openpyxl.load_workbook(file_path, data_only=True)
         ws = wb.active
 
-        # 1. 헤더 행 위치 지능형 탐색
-        header_row_idx = 2  # 기본값
-        for r in range(1, min(10, ws.max_row + 1)):
-            row_vals = [str(ws.cell(r, c).value or '').strip() for c in range(1, min(20, ws.max_column + 1))]
-            if any('과정명' in v for v in row_vals):
-                header_row_idx = r
-                break
+        # 1. 헤더 행 위치 지능형 탐색 (상위 15행 스캔하여 매칭 점수 계산)
+        header_keywords = ['과정명', '과정', '과정정보', '교육일정', '일정', '강사명', '강사', '발송수', '응답수', '과정만족도', '추천지수', '만족도평균', '교재완성도']
+        best_header_row_idx = 2
+        max_score = -1
 
-        # 헤더 컬럼 맵핑 구성
-        col_map = {}
-        for c in range(1, ws.max_column + 1):
-            val = str(ws.cell(header_row_idx, c).value or '').strip()
-            if not val and header_row_idx > 1:
-                # 상위 행 확인 (예: 추천지수(NPS), 과정만족도 등)
-                val = str(ws.cell(header_row_idx - 1, c).value or '').strip()
-            if val:
-                col_map[val] = c
+        for r in range(1, min(15, ws.max_row + 1)):
+            row_vals = [str(ws.cell(r, c).value or '').strip() for c in range(1, min(25, ws.max_column + 1))]
+            score = 0
+            for val in row_vals:
+                if not val:
+                    continue
+                for kw in header_keywords:
+                    if val == kw:
+                        score += 3
+                    elif kw in val:
+                        score += 1
+            if score > max_score:
+                max_score = score
+                best_header_row_idx = r
 
-        def get_col(keywords, default_c):
-            for k, c in col_map.items():
-                for kw in keywords:
-                    if kw in k:
-                        return c
+        if max_score < 2:
+            best_header_row_idx = 2 if ws.max_row > 2 else 1
+
+        # 2단 복합 헤더 구조 구축 (상위 행 + 하위 행 결합)
+        num_cols = ws.max_column
+        col_headers = []
+
+        for c in range(1, num_cols + 1):
+            top = str(ws.cell(best_header_row_idx - 1, c).value or '').strip() if best_header_row_idx > 1 else ''
+            bot = str(ws.cell(best_header_row_idx, c).value or '').strip()
+
+            # 상위 병합 셀 좌측 값 전파
+            if not top and best_header_row_idx > 1:
+                for left_c in range(c - 1, 0, -1):
+                    prev_top = str(ws.cell(best_header_row_idx - 1, left_c).value or '').strip()
+                    if prev_top and any(k in prev_top for k in ['과정정보', '설문대상', '강사만족도', '불편사항', '선호 교육형태', '수강동기']):
+                        top = prev_top
+                        break
+
+            combined = f"{top}_{bot}" if top and bot else (bot or top)
+            col_headers.append({"col": c, "top": top, "bot": bot, "combined": combined})
+
+        def find_col(exact=None, contains=None, exclude=None, default_c=1):
+            exact = exact or []
+            contains = contains or []
+            exclude = exclude or []
+
+            # 1단계: 완전 일치
+            for h in col_headers:
+                for kw in exact:
+                    if h["bot"] == kw or h["top"] == kw or h["combined"] == kw:
+                        return h["col"]
+
+            # 2단계: 제외어 검사 후 포함 일치
+            for kw in contains:
+                for h in col_headers:
+                    text = h["combined"]
+                    if not text:
+                        continue
+                    if any(ex in text for ex in exclude):
+                        continue
+                    if kw in text:
+                        return h["col"]
+
             return default_c
 
-        c_course = get_col(['과정명', '과정'], 1)
-        c_sched = get_col(['교육일정', '일정', '차수'], 2)
-        c_region = get_col(['지역'], 3)
-        c_inst = get_col(['강사명', '강사'], 4)
-        c_hours = get_col(['강의시간', '시간'], 5)
-        c_sent = get_col(['발송수'], 6)
-        c_resp = get_col(['응답수'], 7)
-        c_nps = get_col(['추천지수', 'NPS'], 8)
-        c_course_sat = get_col(['과정만족도'], 9)
-        c_inst_avg = get_col(['만족도평균'], 10)
-        c_expertise = get_col(['강의전문성', '강의내용'], 11)
-        c_delivery = get_col(['전달능력'], 12)
-        c_practical = get_col(['교육효과성', '실무활용도'], 13)
-        c_textbook = get_col(['교재완성도'], 14)
+        c_course = find_col(
+            exact=['과정명', '교육과정명', '과정'],
+            contains=['과정명', '교육과정', '과정'],
+            exclude=['코드', '번호', '정보', '유형', '구분', '시간', '만족도', '차수', '비용', '강사'],
+            default_c=1
+        )
+        c_sched = find_col(
+            exact=['교육일정(차수)', '교육일정', '일정(차수)', '교육기간', '연수기간'],
+            contains=['교육일정', '교육기간', '일정', '연수기간'],
+            exclude=['코드', '번호', '구분', '불편', '시간', '항목', '불편사항'],
+            default_c=2
+        )
+        c_region = find_col(
+            exact=['지역', '교육장소', '장소'],
+            contains=['지역', '장소', '캠퍼스'],
+            exclude=['코드', '번호'],
+            default_c=3
+        )
+        c_inst = find_col(
+            exact=['강사명', '교수명', '강사'],
+            contains=['강사명', '교수명', '강사'],
+            exclude=['코드', '번호', '만족도', '평균', '전문성', '전달', '강의', '료', '확정', '평가'],
+            default_c=4
+        )
+        c_hours = find_col(
+            exact=['강의시간', '교육시간', '시간'],
+            contains=['강의시간', '교육시간', '시간'],
+            exclude=['시작', '종료', '코드'],
+            default_c=5
+        )
+        c_sent = find_col(
+            exact=['발송수', '발송건수', '설문발송수'],
+            contains=['발송'],
+            exclude=['일정', '일자'],
+            default_c=6
+        )
+        c_resp = find_col(
+            exact=['응답수', '응답건수', '설문응답수', '설문인원', '참여인원'],
+            contains=['응답', '설문인원', '참여인원'],
+            exclude=['율', '비율'],
+            default_c=7
+        )
+        c_nps = find_col(
+            exact=['추천지수(NPS)', '추천지수', 'NPS', '순추천고객지수'],
+            contains=['추천지수', 'NPS', '순추천'],
+            exclude=['사유', '이유', '의견', '추천인', '동료추천', '담당자추천'],
+            default_c=8
+        )
+        c_course_sat = find_col(
+            exact=['과정만족도', '교육과정만족도', '과정내용만족도', '과정만족'],
+            contains=['과정만족', '과정내용만족', '교육과정만족'],
+            exclude=['강사', '교재', '시설', '환경', '불편'],
+            default_c=9
+        )
+        c_inst_avg = find_col(
+            exact=['만족도평균', '강사만족도평균', '강사만족도'],
+            contains=['만족도평균', '강사만족'],
+            exclude=['과정'],
+            default_c=10
+        )
+        c_expertise = find_col(
+            exact=['강의전문성', '강의내용', '전문성'],
+            contains=['전문성', '강의내용'],
+            exclude=['코드'],
+            default_c=11
+        )
+        c_delivery = find_col(
+            exact=['전달능력', '전달력', '강의전달'],
+            contains=['전달'],
+            exclude=['코드'],
+            default_c=12
+        )
+        c_practical = find_col(
+            exact=['교육효과성', '실무활용도', '활용도', '실무적용도'],
+            contains=['실무활용', '교육효과', '활용도', '효과성'],
+            exclude=['코드'],
+            default_c=13
+        )
+        c_textbook = find_col(
+            exact=['교재완성도', '교재만족도', '교재품질', '교재'],
+            contains=['교재완성', '교재품질', '교재'],
+            exclude=['코드', '번호', '과정코드'],
+            default_c=14
+        )
 
         if replace:
             self.records = []
@@ -239,20 +350,85 @@ class DataManager:
             for idx, r in enumerate(self.records)
         }
 
-        for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+        for row_idx in range(best_header_row_idx + 1, ws.max_row + 1):
             course_name = ws.cell(row_idx, c_course).value
-            if not course_name or str(course_name).strip() == '' or str(course_name).strip() == '과정명':
+            if not course_name or str(course_name).strip() == '' or str(course_name).strip() in ['과정명', '과정정보']:
                 continue
             
             course_name = str(course_name).strip()
             schedule_raw = str(ws.cell(row_idx, c_sched).value or "").strip()
             region = str(ws.cell(row_idx, c_region).value or "").strip()
             instructor_name = str(ws.cell(row_idx, c_inst).value or "").strip()
-            # 강사명에 날짜 형식(YYYY-MM-DD 등)이나 엑셀 시리얼 번호가 잘못 유입된 경우 정제
-            if re.search(r'^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$', instructor_name) or excel_serial_to_date_string(instructor_name):
-                instructor_name = ""
+
+            # [자가치유 1] 강사명과 교육일정이 뒤바뀐 경우 감지 및 교정
+            def is_date_like(val_str: str) -> bool:
+                if not val_str:
+                    return False
+                if re.search(r'^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}', val_str) or re.search(r'^\[\s*\d{4}', val_str):
+                    return True
+                if excel_serial_to_date_string(val_str):
+                    return True
+                return False
+
+            if is_date_like(instructor_name) and not is_date_like(schedule_raw):
+                schedule_raw, instructor_name = instructor_name, schedule_raw
+            elif is_date_like(instructor_name):
+                # 강사명에 일정이 들어갔는데 schedule_raw도 일정이면 인근 컬럼에서 한글 강사명 탐색
+                found_inst = ""
+                for c in range(1, min(10, ws.max_column + 1)):
+                    if c not in (c_course, c_sched):
+                        val = str(ws.cell(row_idx, c).value or "").strip()
+                        if re.match(r'^[가-힣]{2,4}$', val) and val not in ['서울', '부산', '대구', '대전', '광주', '인천', '울산', '경기', '온라인', '비대면']:
+                            found_inst = val
+                            break
+                instructor_name = found_inst
             
             sched_info = parse_schedule(schedule_raw)
+
+            # [자가치유 2] 발송수, 응답수, 만족도, NPS 자동 교정
+            raw_sent = safe_int(ws.cell(row_idx, c_sent).value)
+            raw_resp = safe_int(ws.cell(row_idx, c_resp).value)
+            raw_nps = safe_float(ws.cell(row_idx, c_nps).value)
+            raw_sat = safe_float(ws.cell(row_idx, c_course_sat).value)
+
+            # 만족도가 5.0 초과인 경우 (예: 발송수 7이 만족도로 들어간 현상)
+            if raw_sat > 5.0:
+                real_sat = 0.0
+                for c in range(7, 14):
+                    v = safe_float(ws.cell(row_idx, c).value)
+                    if 1.0 <= v <= 5.0:
+                        real_sat = v
+                        break
+                if raw_sent == 0 and raw_sat > 5.0:
+                    raw_sent = int(raw_sat)
+                raw_sat = real_sat
+
+            # NPS가 응답수(5, 6 등 소액 정수)와 일치하고 실제 NPS는 다른 열에 있는 경우
+            if raw_nps <= 10.0 and raw_resp > 0 and round(raw_nps) == raw_resp:
+                for c in range(6, 12):
+                    v = safe_float(ws.cell(row_idx, c).value)
+                    if (v > 10.0 or v == 0.0) and v != raw_sent and v != raw_resp:
+                        raw_nps = v
+                        break
+
+            # [자가치유 3] 교재완성도가 5.0 초과(예: 과정코드 306,796)인 경우 차단 및 인접 정상 만족도 복원
+            raw_textbook = safe_float(ws.cell(row_idx, c_textbook).value)
+            if raw_textbook > 5.0 or raw_textbook < 0:
+                real_tb = 0.0
+                for c in range(9, 15):
+                    v = safe_float(ws.cell(row_idx, c).value)
+                    if 1.0 <= v <= 5.0 and c != c_course_sat:
+                        real_tb = v
+                raw_textbook = real_tb
+
+            def sanitize_score(v_in):
+                val = safe_float(v_in)
+                return 0.0 if (val > 5.0 or val < 0) else val
+
+            raw_inst_avg = sanitize_score(ws.cell(row_idx, c_inst_avg).value)
+            raw_expertise = sanitize_score(ws.cell(row_idx, c_expertise).value)
+            raw_delivery = sanitize_score(ws.cell(row_idx, c_delivery).value)
+            raw_practical = sanitize_score(ws.cell(row_idx, c_practical).value)
 
             record = {
                 "course_name": course_name,
@@ -265,15 +441,15 @@ class DataManager:
                 "region": region,
                 "instructor_name": instructor_name,
                 "hours": safe_int(ws.cell(row_idx, c_hours).value),
-                "sent_count": safe_int(ws.cell(row_idx, c_sent).value),
-                "respondent_count": safe_int(ws.cell(row_idx, c_resp).value),
-                "nps": safe_float(ws.cell(row_idx, c_nps).value),
-                "course_satisfaction": safe_float(ws.cell(row_idx, c_course_sat).value),
-                "instructor_satisfaction_avg": safe_float(ws.cell(row_idx, c_inst_avg).value),
-                "teaching_expertise": safe_float(ws.cell(row_idx, c_expertise).value),
-                "delivery_skill": safe_float(ws.cell(row_idx, c_delivery).value),
-                "practical_use": safe_float(ws.cell(row_idx, c_practical).value),
-                "textbook_quality": safe_float(ws.cell(row_idx, c_textbook).value),
+                "sent_count": raw_sent,
+                "respondent_count": raw_resp,
+                "nps": raw_nps,
+                "course_satisfaction": raw_sat,
+                "instructor_satisfaction_avg": raw_inst_avg,
+                "teaching_expertise": raw_expertise,
+                "delivery_skill": raw_delivery,
+                "practical_use": raw_practical,
+                "textbook_quality": raw_textbook,
                 "complaints": {
                     "정보": safe_int(ws.cell(row_idx, 15).value),
                     "절차": safe_int(ws.cell(row_idx, 16).value),
@@ -363,7 +539,7 @@ class DataManager:
         """
         # 1. 일치하는 레코드 필터링
         filtered = [r for r in self.records if r["course_name"] == course_name]
-        if instructor_name:
+        if instructor_name and mode == "instructor":
             filtered = [r for r in filtered if r["instructor_name"] == instructor_name]
 
         if not filtered:
@@ -374,7 +550,6 @@ class DataManager:
 
         # 3. 차수별/월별 그룹화
         # 차수 식별자: schedule_raw
-        # 하나의 차수에 여러 강사가 있을 수 있으므로 차수별로 묶음
         rounds_dict = {}
         for r in filtered:
             sched = r["schedule_raw"]
@@ -392,15 +567,21 @@ class DataManager:
                     "records": []
                 }
             rounds_dict[sched]["records"].append(r)
-            # 만약 여러 강사 레코드라면 대표 설문인원이나 합계
             rounds_dict[sched]["respondent_count"] = max(rounds_dict[sched]["respondent_count"], r["respondent_count"])
-            rounds_dict[sched]["course_satisfaction"] = r["course_satisfaction"]
-            rounds_dict[sched]["nps"] = r["nps"]
+
+            # 5점 만점 정상 만족도 우선 채택
+            sat = r["course_satisfaction"]
+            if 1.0 <= sat <= 5.0 or rounds_dict[sched]["course_satisfaction"] == 0:
+                rounds_dict[sched]["course_satisfaction"] = sat
+
+            # NPS 정상값 채택
+            n_val = r["nps"]
+            if n_val > 10.0 or n_val < 0 or rounds_dict[sched]["nps"] == 0:
+                rounds_dict[sched]["nps"] = n_val
 
         ordered_rounds = sorted(list(rounds_dict.values()), key=lambda x: x["start_date"])
 
         # 4. 차수별 누적 평균 계산
-        # 차수 진행에 따라 1차, 2차... 누적 평균 계산
         cumulative_scores = {
             "teaching_expertise": [],
             "delivery_skill": [],

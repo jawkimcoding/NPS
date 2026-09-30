@@ -346,6 +346,18 @@ function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
   const isLine = labels && labels.length > 1;
   const ctx = document.getElementById(canvasId).getContext('2d');
 
+  // 데이터 정제 (만족도는 0~5.0 범위 강제, NPS는 -100~100)
+  const cleanData = (data || []).map(v => {
+    const num = Number(v) || 0;
+    if (label === '만족도') {
+      return Number(Math.min(5.0, Math.max(0, num)).toFixed(1));
+    }
+    return Number(num.toFixed(1));
+  });
+
+  const isNps = label === 'NPS';
+  const minVal = isNps && cleanData.some(v => v < 0) ? -100 : 0;
+
   if (isLine) {
     charts[canvasId] = new Chart(ctx, {
       type: 'line',
@@ -353,15 +365,15 @@ function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
         labels: labels,
         datasets: [{
           label: label,
-          data: data,
+          data: cleanData,
           borderColor: color,
           backgroundColor: color,
           borderWidth: 2.5,
           pointBackgroundColor: color,
           pointBorderColor: '#ffffff',
           pointBorderWidth: 1.5,
-          pointRadius: 4.5,
-          pointHoverRadius: 6,
+          pointRadius: 5,
+          pointHoverRadius: 7,
           fill: false,
           tension: 0
         }]
@@ -373,16 +385,20 @@ function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: (item) => ` ${label}: ${item.formattedValue}`
+              label: (item) => ` ${label}: ${item.formattedValue}${isNps ? '점' : '점 / 5.0'}`
             }
           }
         },
         scales: {
           y: {
-            beginAtZero: true,
+            min: minVal,
+            max: maxVal ? maxVal : undefined,
             suggestedMax: maxVal,
             grid: { color: '#e5e7eb' },
-            ticks: { font: { size: 10, family: 'Malgun Gothic' } }
+            ticks: {
+              stepSize: label === '만족도' ? 1 : undefined,
+              font: { size: 10, family: 'Malgun Gothic' }
+            }
           },
           x: {
             grid: { display: false },
@@ -392,7 +408,7 @@ function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
       }
     });
   } else {
-    renderBarChart(canvasId, labels, data, label, color, maxVal);
+    renderBarChart(canvasId, labels, cleanData, label, color, maxVal);
   }
 }
 

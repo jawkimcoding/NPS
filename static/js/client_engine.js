@@ -173,8 +173,18 @@ class ClientEngine {
       const item = roundsMap.get(sched);
       item.records.push(r);
       item.respondent_count = Math.max(item.respondent_count, r.respondent_count);
-      item.course_satisfaction = r.course_satisfaction;
-      item.nps = r.nps;
+
+      // 5점 만점 정상 만족도 우선 채택
+      const sat = r.course_satisfaction;
+      if ((sat >= 1.0 && sat <= 5.0) || item.course_satisfaction === 0) {
+        item.course_satisfaction = sat;
+      }
+
+      // NPS 정상값 채택
+      const nVal = r.nps;
+      if (nVal > 10.0 || nVal < 0 || item.nps === 0) {
+        item.nps = nVal;
+      }
     });
 
     const orderedRounds = Array.from(roundsMap.values()).sort((a, b) => (a.start_date || '').localeCompare(b.start_date || ''));
@@ -342,6 +352,7 @@ class ClientEngine {
   }
 
   // 지능형 엑셀 파일 파싱 및 병합 (지능형 헤더 감지)
+  // 지능형 엑셀 파일 파싱 및 병합 (지능형 복합 헤더 감지, 제외어 필터, 값 기반 자가 치유)
   async parseAndMergeExcel(file, replaceMode = false) {
     if (!window.XLSX) {
       throw new Error('SheetJS(XLSX) 라이브러리가 로드되지 않았습니다.');
@@ -361,83 +372,271 @@ class ClientEngine {
             throw new Error('엑셀 파일에 유효한 데이터가 없습니다.');
           }
 
-          // 1. 헤더 행 위치 지능형 탐색
-          let headerRowIdx = -1;
-          let colMap = {};
+          // 1. 헤더 행 위치 지능형 탐색 (상위 15행 스캔하여 헤더 매칭 점수 계산)
+          let bestHeaderRowIdx = -1;
+          let maxScore = -1;
+          const headerKeywords = ['과정명', '과정', '과정정보', '교육일정', '일정', '강사명', '강사', '발송수', '응답수', '과정만족도', '추천지수', '만족도평균', '교재완성도'];
 
-          for (let r = 0; r < Math.min(10, rows.length); r++) {
+          for (let r = 0; r < Math.min(15, rows.length); r++) {
             const rowStr = rows[r].map(cell => String(cell || '').trim());
-            // '과정명' 또는 '과정' 또는 '일정' 또는 '강사'가 들어간 행 찾기
-            if (rowStr.some(v => v.includes('과정명') || v.includes('과정정보'))) {
-              headerRowIdx = r;
-              // 만약 바로 다음 행에 세부 헤더('과정명', '교육일정', '강사명' 등)가 있다면 다음 행 사용
-              if (r + 1 < rows.length) {
-                const nextRowStr = rows[r + 1].map(c => String(c || '').trim());
-                if (nextRowStr.some(v => v.includes('과정명') || v.includes('교육일정') || v.includes('강사명'))) {
-                  headerRowIdx = r + 1;
+            let score = 0;
+            rowStr.forEach(val => {
+              if (!val) return;
+              headerKeywords.forEach(kw => {
+                if (val === kw) score += 3;
+                else if (val.includes(kw)) score += 1;
+              });
+            });
+            if (score > maxScore) {
+              maxScore = score;
+              bestHeaderRowIdx = r;
+            }
+          }
+
+          if (bestHeaderRowIdx === -1 || maxScore < 2) {
+            bestHeaderRowIdx = (rows.length > 2 && rows[1].some(c => String(c).includes('과정') || String(c).includes('일정'))) ? 1 : 0;
+          }
+
+          // 2단 복합 헤더 구조 완벽 대응 (상위 행 + 하위 행 결합 맵)
+          const numCols = Math.max(...rows.slice(0, Math.min(15, rows.length)).map(r => r.length));
+          const colHeaders = [];
+
+          for (let c = 0; c < numCols; c++) {
+            let top = bestHeaderRowIdx > 0 ? String(rows[bestHeaderRowIdx - 1]?.[c] || '').trim() : '';
+            let bot = String(rows[bestHeaderRowIdx]?.[c] || '').trim();
+
+            // 상위 셀이 병합되어 비어있을 경우 좌측 값 전파 (수평 병합 헤더 대응)
+            if (!top && bestHeaderRowIdx > 0) {
+              for (let leftC = c - 1; leftC >= 0; leftC--) {
+                const prevTop = String(rows[bestHeaderRowIdx - 1]?.[leftC] || '').trim();
+                if (prevTop && ['과정정보', '설문대상', '강사만족도', '불편사항', '선호 교육형태', '수강동기'].some(k => prevTop.includes(k))) {
+                  top = prevTop;
+                  break;
                 }
               }
-              break;
             }
+
+            const combined = [top, bot].filter(Boolean).join('_');
+            colHeaders.push({ col: c, top, bot, combined });
           }
 
-          if (headerRowIdx === -1) {
-            // 헤더를 못 찾았을 경우 기본 2행(index 1) 또는 3행(index 2) 가정
-            headerRowIdx = (rows.length > 2 && rows[1].some(c => String(c).includes('과정') || String(c).includes('일정'))) ? 1 : 0;
-          }
-
-          const headerRow = rows[headerRowIdx].map(c => String(c || '').trim());
-          headerRow.forEach((colName, idx) => {
-            let name = colName;
-            if (!name && headerRowIdx > 0) {
-              name = String(rows[headerRowIdx - 1]?.[idx] || '').trim();
+          // 지능형 컬럼 탐색 헬퍼: 1순위 완전일치 -> 2순위 제외어 필터링 후 포함일치
+          const findCol = ({ exact = [], contains = [], exclude = [], defaultIdx = -1 }) => {
+            // 1단계: 완전 일치 (bot 또는 top 또는 combined 정확 일치)
+            for (let c = 0; c < numCols; c++) {
+              const h = colHeaders[c];
+              for (const kw of exact) {
+                if (h.bot === kw || h.top === kw || h.combined === kw) {
+                  return c;
+                }
+              }
             }
-            if (name) colMap[name] = idx;
-          });
-
-          // 컬럼 인덱스 헬퍼
-          const findCol = (keywords, defaultIdx) => {
-            for (const [name, idx] of Object.entries(colMap)) {
-              for (const kw of keywords) {
-                if (name.includes(kw)) return idx;
+            // 2단계: 제외어 검사 후 포함 일치
+            for (const kw of contains) {
+              for (let c = 0; c < numCols; c++) {
+                const h = colHeaders[c];
+                const text = h.combined;
+                if (!text) continue;
+                const hasExclude = exclude.some(ex => text.includes(ex));
+                if (!hasExclude && text.includes(kw)) {
+                  return c;
+                }
               }
             }
             return defaultIdx;
           };
 
-          const idxCourse = findCol(['과정명', '과정'], 0);
-          const idxSched = findCol(['교육일정', '일정', '차수'], 1);
-          const idxRegion = findCol(['지역'], 2);
-          const idxInst = findCol(['강사명', '강사'], 3);
-          const idxHours = findCol(['강의시간', '시간'], 4);
-          const idxSent = findCol(['발송수'], 5);
-          const idxResp = findCol(['응답수'], 6);
-          const idxNps = findCol(['추천지수', 'NPS'], 7);
-          const idxCourseSat = findCol(['과정만족도'], 8);
-          const idxInstSat = findCol(['만족도평균'], 9);
-          const idxExpertise = findCol(['강의전문성', '강의내용'], 10);
-          const idxDelivery = findCol(['전달능력'], 11);
-          const idxPractical = findCol(['교육효과성', '실무활용도'], 12);
-          const idxTextbook = findCol(['교재완성도'], 13);
+          const idxCourse = findCol({
+            exact: ['과정명', '교육과정명', '과정'],
+            contains: ['과정명', '교육과정', '과정'],
+            exclude: ['코드', '번호', '정보', '유형', '구분', '시간', '만족도', '차수', '비용', '강사'],
+            defaultIdx: 0
+          });
 
+          const idxSched = findCol({
+            exact: ['교육일정(차수)', '교육일정', '일정(차수)', '교육기간', '연수기간'],
+            contains: ['교육일정', '교육기간', '일정', '연수기간'],
+            exclude: ['코드', '번호', '구분', '불편', '시간', '항목', '불편사항'],
+            defaultIdx: 1
+          });
+
+          const idxRegion = findCol({
+            exact: ['지역', '교육장소', '장소'],
+            contains: ['지역', '장소', '캠퍼스'],
+            exclude: ['코드', '번호'],
+            defaultIdx: 2
+          });
+
+          const idxInst = findCol({
+            exact: ['강사명', '교수명', '강사'],
+            contains: ['강사명', '교수명', '강사'],
+            exclude: ['코드', '번호', '만족도', '평균', '전문성', '전달', '강의', '료', '확정', '평가'],
+            defaultIdx: 3
+          });
+
+          const idxHours = findCol({
+            exact: ['강의시간', '교육시간', '시간'],
+            contains: ['강의시간', '교육시간', '시간'],
+            exclude: ['시작', '종료', '코드'],
+            defaultIdx: 4
+          });
+
+          const idxSent = findCol({
+            exact: ['발송수', '발송건수', '설문발송수'],
+            contains: ['발송'],
+            exclude: ['일정', '일자'],
+            defaultIdx: 5
+          });
+
+          const idxResp = findCol({
+            exact: ['응답수', '응답건수', '설문응답수', '설문인원', '참여인원'],
+            contains: ['응답', '설문인원', '참여인원'],
+            exclude: ['율', '비율'],
+            defaultIdx: 6
+          });
+
+          const idxNps = findCol({
+            exact: ['추천지수(NPS)', '추천지수', 'NPS', '순추천고객지수'],
+            contains: ['추천지수', 'NPS', '순추천'],
+            exclude: ['사유', '이유', '의견', '추천인', '동료추천', '담당자추천'],
+            defaultIdx: 7
+          });
+
+          const idxCourseSat = findCol({
+            exact: ['과정만족도', '교육과정만족도', '과정내용만족도', '과정만족'],
+            contains: ['과정만족', '과정내용만족', '교육과정만족'],
+            exclude: ['강사', '교재', '시설', '환경', '불편'],
+            defaultIdx: 8
+          });
+
+          const idxInstSat = findCol({
+            exact: ['만족도평균', '강사만족도평균', '강사만족도'],
+            contains: ['만족도평균', '강사만족'],
+            exclude: ['과정'],
+            defaultIdx: 9
+          });
+
+          const idxExpertise = findCol({
+            exact: ['강의전문성', '강의내용', '전문성'],
+            contains: ['전문성', '강의내용'],
+            exclude: ['코드'],
+            defaultIdx: 10
+          });
+
+          const idxDelivery = findCol({
+            exact: ['전달능력', '전달력', '강의전달'],
+            contains: ['전달'],
+            exclude: ['코드'],
+            defaultIdx: 11
+          });
+
+          const idxPractical = findCol({
+            exact: ['교육효과성', '실무활용도', '활용도', '실무적용도'],
+            contains: ['실무활용', '교육효과', '활용도', '효과성'],
+            exclude: ['코드'],
+            defaultIdx: 12
+          });
+
+          const idxTextbook = findCol({
+            exact: ['교재완성도', '교재만족도', '교재품질', '교재'],
+            contains: ['교재완성', '교재품질', '교재'],
+            exclude: ['코드', '번호', '과정코드'],
+            defaultIdx: 13
+          });
+
+          // 2. 데이터 행 파싱 및 값 기반 자가 치유(Sanity Check & Auto-Healing)
           const newRecords = [];
-          for (let r = headerRowIdx + 1; r < rows.length; r++) {
+          for (let r = bestHeaderRowIdx + 1; r < rows.length; r++) {
             const row = rows[r];
             if (!row || !row[idxCourse]) continue;
 
-            const courseName = String(row[idxCourse]).trim();
-            if (!courseName || courseName === '과정명') continue;
+            let courseName = String(row[idxCourse]).trim();
+            if (!courseName || courseName === '과정명' || courseName === '과정정보') continue;
 
-            const schedRaw = String(row[idxSched] || '').trim();
-            const region = String(row[idxRegion] || '').trim();
+            let schedRaw = String(row[idxSched] || '').trim();
+            let region = String(row[idxRegion] || '').trim();
             let instName = String(row[idxInst] || '').trim();
 
-            // 강사명에 날짜 형식(YYYY-MM-DD 등)이나 엑셀 시리얼 번호가 잘못 유입된 경우 정제
-            if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(instName) || this.excelSerialToDateString(instName)) {
-              instName = '';
+            // [자가치유 1] 강사명과 교육일정이 뒤바뀐 경우(Swap) 감지 및 교정
+            const isDateLike = (str) => /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(str) || /^\[\s*\d{4}/.test(str) || /^\d{5}(?:\.\d+)?$/.test(str);
+            if (isDateLike(instName) && !isDateLike(schedRaw)) {
+              const temp = schedRaw;
+              schedRaw = instName;
+              instName = temp;
+            } else if (isDateLike(instName)) {
+              // 강사명에 일정이 들어갔는데 schedRaw도 일정이면 인근 컬럼에서 강사 이름 탐색
+              let foundInst = '';
+              for (let c = 0; c < Math.min(10, row.length); c++) {
+                if (c !== idxCourse && c !== idxSched) {
+                  const val = String(row[c] || '').trim();
+                  if (/^[가-힣]{2,4}$/.test(val) && !['서울', '부산', '대구', '대전', '광주', '인천', '울산', '경기', '온라인', '비대면'].includes(val)) {
+                    foundInst = val;
+                    break;
+                  }
+                }
+              }
+              instName = foundInst;
             }
 
             const parsedSched = this.parseSchedule(schedRaw);
+
+            // [자가치유 2] 발송수, 응답수, 과정만족도, NPS 상호 오인식 자동 교정
+            let rawSent = parseInt(row[idxSent]) || 0;
+            let rawResp = parseInt(row[idxResp]) || 0;
+            let rawNps = parseFloat(row[idxNps]) || 0;
+            let rawSat = parseFloat(row[idxCourseSat]) || 0;
+
+            // 5점 만점인 만족도가 5.0 초과인 경우 (예: 발송수 7이 만족도로 들어간 현상 교정)
+            if (rawSat > 5.0) {
+              // 7~13열 사이에서 1.0~5.0 사이의 실수값(실제 만족도) 탐색
+              let realSat = 0;
+              for (let c = 7; c <= 13; c++) {
+                const v = parseFloat(row[c]);
+                if (!isNaN(v) && v >= 1.0 && v <= 5.0) {
+                  realSat = v;
+                  break;
+                }
+              }
+              if (rawSent === 0 && rawSat > 5.0) {
+                rawSent = Math.round(rawSat);
+              }
+              rawSat = realSat;
+            }
+
+            // NPS가 응답수(5, 6 등 소액 정수)와 완전히 같고 실제 NPS는 다른 열에 있는 경우 교정
+            if (rawNps <= 10 && rawResp > 0 && Math.round(rawNps) === rawResp) {
+              for (let c = 6; c <= 11; c++) {
+                const v = parseFloat(row[c]);
+                if (!isNaN(v) && (v > 10.0 || v === 0) && v !== rawSent && v !== rawResp) {
+                  rawNps = v;
+                  break;
+                }
+              }
+            }
+
+            // [자가치유 3] 교재완성도가 5.0 초과(예: 과정코드 306,796)인 경우 완벽 차단 및 인접 만족도 복원
+            let rawTextbook = parseFloat(row[idxTextbook]) || 0;
+            if (rawTextbook > 5.0 || rawTextbook < 0) {
+              let realTextbook = 0;
+              for (let c = 9; c <= 14; c++) {
+                const v = parseFloat(row[c]);
+                if (!isNaN(v) && v >= 1.0 && v <= 5.0 && c !== idxCourseSat) {
+                  realTextbook = v;
+                }
+              }
+              rawTextbook = realTextbook;
+            }
+
+            // 기타 강사 평가 점수들 5점 척도 범위 보정
+            const sanitizeScore = (val) => {
+              const num = parseFloat(val) || 0;
+              return (num > 5.0 || num < 0) ? 0 : num;
+            };
+
+            const rawInstSat = sanitizeScore(row[idxInstSat]);
+            const rawExpertise = sanitizeScore(row[idxExpertise]);
+            const rawDelivery = sanitizeScore(row[idxDelivery]);
+            const rawPractical = sanitizeScore(row[idxPractical]);
 
             newRecords.push({
               course_name: courseName,
@@ -450,15 +649,15 @@ class ClientEngine {
               region: region,
               instructor_name: instName,
               hours: parseInt(row[idxHours]) || 0,
-              sent_count: parseInt(row[idxSent]) || 0,
-              respondent_count: parseInt(row[idxResp]) || 0,
-              nps: parseFloat(row[idxNps]) || 0,
-              course_satisfaction: parseFloat(row[idxCourseSat]) || 0,
-              instructor_satisfaction_avg: parseFloat(row[idxInstSat]) || 0,
-              teaching_expertise: parseFloat(row[idxExpertise]) || 0,
-              delivery_skill: parseFloat(row[idxDelivery]) || 0,
-              practical_use: parseFloat(row[idxPractical]) || 0,
-              textbook_quality: parseFloat(row[idxTextbook]) || 0,
+              sent_count: rawSent,
+              respondent_count: rawResp,
+              nps: rawNps,
+              course_satisfaction: rawSat,
+              instructor_satisfaction_avg: rawInstSat,
+              teaching_expertise: rawExpertise,
+              delivery_skill: rawDelivery,
+              practical_use: rawPractical,
+              textbook_quality: rawTextbook,
               complaints: {
                 "정보": parseInt(row[14]) || 0,
                 "절차": parseInt(row[15]) || 0,
