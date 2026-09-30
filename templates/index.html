@@ -168,6 +168,11 @@
           <i class="fa-solid fa-database mr-1.5 text-emerald-600"></i> <span id="recordCount" class="font-bold">0</span>건 로드됨
         </span>
 
+        <!-- 데이터 초기화 버튼 -->
+        <button id="btnResetDataNav" class="inline-flex items-center px-3 py-2 border border-red-200 rounded-md text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 shadow-sm transition" title="업로드된 추가 데이터를 삭제하고 기본 상태로 복원합니다">
+          <i class="fa-solid fa-rotate-left mr-1.5 text-red-500"></i> 데이터 초기화
+        </button>
+
         <!-- 업로드 모달 열기 버튼 -->
         <button id="btnOpenUpload" class="inline-flex items-center px-3.5 py-2 border border-slate-300 rounded-md text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 shadow-sm transition">
           <i class="fa-solid fa-cloud-arrow-up mr-1.5 text-indigo-600"></i> 로우데이터 업로드
@@ -196,9 +201,15 @@
             <i class="fa-solid fa-book-open mr-1"></i> 교육운영 결과보고서 양식 (과정 전체)
           </button>
         </div>
-        <span class="text-xs text-slate-500">
-          * 과정명 또는 강사를 검색하여 일치하는 양식을 확인하세요.
-        </span>
+        <div class="flex items-center space-x-2">
+          <!-- 현재 선택된 과정 데이터 삭제 버튼 -->
+          <button id="btnDeleteCurrentCourse" class="hidden inline-flex items-center px-2.5 py-1 rounded text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition" title="현재 선택된 과정의 설문 데이터를 완전히 삭제합니다">
+            <i class="fa-solid fa-trash-can mr-1"></i> 현재 과정 데이터 삭제
+          </button>
+          <span class="text-xs text-slate-500 hidden sm:inline">
+            * 과정명 또는 강사를 검색하여 일치하는 양식을 확인하세요.
+          </span>
+        </div>
       </div>
 
       <!-- 검색 컨트롤 그리드 -->
@@ -437,8 +448,11 @@
 
       <div id="uploadStatus" class="hidden text-xs p-2.5 rounded font-medium"></div>
 
-      <div class="flex justify-end pt-2">
-        <button id="btnCancelUpload" class="px-3.5 py-1.5 rounded text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-300">
+      <div class="flex items-center justify-between pt-3 border-t border-slate-200">
+        <button id="btnResetUploadedData" type="button" class="inline-flex items-center px-3 py-1.5 rounded text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 transition" title="업로드된 추가 데이터를 삭제하고 기본 상태로 복원합니다">
+          <i class="fa-solid fa-rotate-left mr-1.5 text-red-500"></i> 업로드 데이터 초기화
+        </button>
+        <button id="btnCancelUpload" class="px-4 py-1.5 rounded text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-300">
           닫기
         </button>
       </div>

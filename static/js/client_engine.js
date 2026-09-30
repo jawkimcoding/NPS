@@ -20,28 +20,36 @@ class ClientEngine {
     let extraRecords = [];
     let extraComments = {};
     let extraCurriculums = {};
+    let deletedCourses = [];
 
     try {
       this.db = await this.openIndexedDB();
       extraRecords = (await this.getFromDB('custom_records')) || [];
       extraComments = (await this.getFromDB('custom_comments')) || {};
       extraCurriculums = (await this.getFromDB('custom_curriculums')) || {};
+      deletedCourses = (await this.getFromDB('deleted_courses')) || [];
     } catch (e) {
       console.warn('IndexedDB unavailable, falling back to LocalStorage:', e);
       try {
         extraRecords = JSON.parse(localStorage.getItem('kpc_custom_records') || '[]');
         extraComments = JSON.parse(localStorage.getItem('kpc_custom_comments') || '{}');
         extraCurriculums = JSON.parse(localStorage.getItem('kpc_custom_curriculums') || '{}');
+        deletedCourses = JSON.parse(localStorage.getItem('kpc_deleted_courses') || '[]');
       } catch (err) {}
     }
 
-    // 3. 레코드 병합 (과정명_일정_강사명 기준 중복 방지)
+    // 3. 레코드 병합 (과정명_일정_강사명 기준 중복 방지, 삭제된 과정 제외)
+    const deletedSet = new Set(deletedCourses);
     const recordMap = new Map();
     defaultRecords.forEach(r => {
-      recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r);
+      if (!deletedSet.has(r.course_name)) {
+        recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r);
+      }
     });
     extraRecords.forEach(r => {
-      recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r);
+      if (!deletedSet.has(r.course_name)) {
+        recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r);
+      }
     });
 
     this.records = Array.from(recordMap.values());
@@ -101,6 +109,84 @@ class ClientEngine {
         reject(e);
       }
     });
+  }
+
+  deleteFromDB(key) {
+    return new Promise((resolve) => {
+      if (!this.db) {
+        try {
+          localStorage.removeItem(`kpc_${key}`);
+          resolve();
+        } catch (e) {
+          resolve();
+        }
+        return;
+      }
+      try {
+        const tx = this.db.transaction('store', 'readwrite');
+        tx.objectStore('store').delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch (e) {
+        resolve();
+      }
+    });
+  }
+
+  // 업로드된 데이터 초기화 (기본 내장 데이터로 복원)
+  async resetUploadedData() {
+    await this.deleteFromDB('custom_records');
+    await this.deleteFromDB('deleted_courses');
+    await this.init();
+    return this.records.length;
+  }
+
+  // 특정 과정 데이터 삭제
+  async deleteCourse(courseName) {
+    if (!courseName) return this.records.length;
+
+    // 1. 메모리 레코드에서 제거
+    this.records = this.records.filter(r => r.course_name !== courseName);
+
+    // 2. custom_records에서 제거 후 저장
+    const customRecords = (await this.getFromDB('custom_records')) || [];
+    const updatedCustom = customRecords.filter(r => r.course_name !== courseName);
+    await this.saveToDB('custom_records', updatedCustom);
+
+    // 3. deleted_courses에 추가 (기본 내장 데이터에서도 제외되도록)
+    const deletedCourses = (await this.getFromDB('deleted_courses')) || [];
+    if (!deletedCourses.includes(courseName)) {
+      deletedCourses.push(courseName);
+      await this.saveToDB('deleted_courses', deletedCourses);
+    }
+
+    // 4. 주관식 의견 및 커리큘럼 정리
+    for (const k in this.comments) {
+      if (k.startsWith(courseName + '_')) {
+        delete this.comments[k];
+      }
+    }
+    await this.saveToDB('custom_comments', this.comments);
+
+    for (const k in this.curriculums) {
+      if (k.startsWith(courseName + '_')) {
+        delete this.curriculums[k];
+      }
+    }
+    await this.saveToDB('custom_curriculums', this.curriculums);
+
+    return this.records.length;
+  }
+
+  // 전체 데이터 완전 비우기 (빈 상태)
+  async clearAllData() {
+    const allCourses = Array.from(new Set((window.DEFAULT_SURVEY_RECORDS || []).map(r => r.course_name)));
+    await this.saveToDB('deleted_courses', allCourses);
+    await this.saveToDB('custom_records', []);
+    this.records = [];
+    this.comments = {};
+    this.curriculums = {};
+    return 0;
   }
 
   getFilterOptions() {

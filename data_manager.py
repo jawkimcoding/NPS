@@ -185,6 +185,45 @@ class DataManager:
         with open(CURRICULUM_STORE_PATH, "w", encoding="utf-8") as f:
             json.dump(self.curriculums, f, ensure_ascii=False, indent=2)
 
+    def delete_course(self, course_name: str) -> int:
+        """특정 과정의 모든 레코드 및 관련 의견, 커리큘럼 삭제"""
+        orig_count = len(self.records)
+        self.records = [r for r in self.records if r.get("course_name") != course_name]
+        deleted_count = orig_count - len(self.records)
+
+        # 주관식 의견 정리
+        keys_to_del = [k for k in self.comments if k.startswith(course_name + "_")]
+        for k in keys_to_del:
+            del self.comments[k]
+
+        # 커리큘럼 정리
+        curr_keys_to_del = [k for k in self.curriculums if k.startswith(course_name + "_")]
+        for k in curr_keys_to_del:
+            del self.curriculums[k]
+
+        self.save_survey_store()
+        self.save_comments_store()
+        self.save_curriculum_store()
+        return deleted_count
+
+    def reset_to_default(self) -> int:
+        """기본 원본 로우데이터 엑셀에서 데이터를 다시 로드하여 초기 상태로 복원"""
+        default_raw_file = os.path.join(BASE_DIR, "과정별설문결과_2026-09-23_로우데이터.xlsx")
+        if os.path.exists(default_raw_file):
+            return self.import_raw_excel(default_raw_file, replace=True)
+        return len(self.records)
+
+    def clear_all_records(self) -> int:
+        """모든 레코드 초기화 (빈 상태)"""
+        count = len(self.records)
+        self.records = []
+        self.comments = {}
+        self.curriculums = {}
+        self.save_survey_store()
+        self.save_comments_store()
+        self.save_curriculum_store()
+        return count
+
     def import_raw_excel(self, file_path: str, replace: bool = False) -> int:
         """로우데이터 엑셀 파일을 읽어와 레코드 병합 및 저장 (지능형 복합 헤더 감지, 제외어 필터, 자가 치유)"""
         wb = openpyxl.load_workbook(file_path, data_only=True)

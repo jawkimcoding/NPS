@@ -52,6 +52,10 @@ class CurriculumUpdateRequest(BaseModel):
     curriculum_text: str
 
 
+class CourseDeleteRequest(BaseModel):
+    course_name: str
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse(request=request, name="index.html")
@@ -93,6 +97,31 @@ async def update_comments(req: CommentUpdateRequest):
 async def update_curriculum(req: CurriculumUpdateRequest):
     data_manager.save_curriculum(req.course_name, req.instructor_name, req.curriculum_text)
     return {"status": "success", "message": "커리큘럼 내용이 저장되었습니다."}
+
+
+@app.post("/api/reset-data")
+async def reset_data():
+    """기본 원본 데이터로 초기화 (업로드 데이터 모두 삭제)"""
+    count = data_manager.reset_to_default()
+    return {
+        "status": "success",
+        "message": f"데이터가 초기 기본 상태({count}건)로 복원되었습니다.",
+        "total_records": count
+    }
+
+
+@app.post("/api/delete-course")
+async def delete_course_endpoint(req: CourseDeleteRequest):
+    """특정 과정 데이터 삭제"""
+    course_name = req.course_name.strip()
+    if not course_name:
+        raise HTTPException(status_code=400, detail="삭제할 과정명이 필요합니다.")
+    deleted_count = data_manager.delete_course(course_name)
+    return {
+        "status": "success",
+        "message": f"'{course_name}' 과정 데이터 {deleted_count}건이 삭제되었습니다.",
+        "total_records": len(data_manager.records)
+    }
 
 
 @app.post("/api/upload")

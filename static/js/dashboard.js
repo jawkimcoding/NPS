@@ -49,6 +49,8 @@ function initUIEvents() {
   const btnSearch = document.getElementById('btnSearch');
   const btnDownload = document.getElementById('btnDownloadExcel');
   const btnSaveComments = document.getElementById('btnSaveComments');
+  const btnResetNav = document.getElementById('btnResetDataNav');
+  const btnDeleteCourse = document.getElementById('btnDeleteCurrentCourse');
 
   // 모드 탭 전환
   document.getElementById('tabInstructorMode').addEventListener('click', () => switchMode('instructor'));
@@ -63,6 +65,7 @@ function initUIEvents() {
     } else {
       clearBtn.classList.add('hidden');
       dropdown.classList.add('hidden');
+      if (btnDeleteCourse) btnDeleteCourse.classList.add('hidden');
     }
   });
 
@@ -77,6 +80,7 @@ function initUIEvents() {
     clearBtn.classList.add('hidden');
     dropdown.classList.add('hidden');
     instSelect.innerHTML = '<option value="">강사를 선택하세요</option>';
+    if (btnDeleteCourse) btnDeleteCourse.classList.add('hidden');
   });
 
   // 바깥 클릭 시 드롭다운 닫기
@@ -102,6 +106,16 @@ function initUIEvents() {
 
   // 엑셀 다운로드 버튼
   btnDownload.addEventListener('click', downloadExcel);
+
+  // 상단 네비게이션 데이터 초기화 버튼
+  if (btnResetNav) {
+    btnResetNav.addEventListener('click', handleResetData);
+  }
+
+  // 현재 과정 삭제 버튼
+  if (btnDeleteCourse) {
+    btnDeleteCourse.addEventListener('click', handleDeleteCurrentCourse);
+  }
 
   // 로우데이터 업로드 모달 이벤트
   initUploadModal();
@@ -161,6 +175,9 @@ function selectCourse(courseName) {
   document.getElementById('courseDropdown').classList.add('hidden');
   document.getElementById('btnClearSearch').classList.remove('hidden');
 
+  const btnDel = document.getElementById('btnDeleteCurrentCourse');
+  if (btnDel) btnDel.classList.remove('hidden');
+
   const instSelect = document.getElementById('instructorSelect');
   instSelect.innerHTML = '<option value="">강사를 선택하세요</option>';
 
@@ -182,6 +199,9 @@ function selectCourse(courseName) {
 window.selectSampleCourse = function(courseName, instName) {
   document.getElementById('courseSearchInput').value = courseName;
   document.getElementById('btnClearSearch').classList.remove('hidden');
+
+  const btnDel = document.getElementById('btnDeleteCurrentCourse');
+  if (btnDel) btnDel.classList.remove('hidden');
 
   if (instName) {
     switchMode('instructor');
@@ -791,6 +811,11 @@ function initUploadModal() {
     statusDiv.innerHTML = '';
   });
 
+  const btnResetUploaded = document.getElementById('btnResetUploadedData');
+  if (btnResetUploaded) {
+    btnResetUploaded.addEventListener('click', handleResetData);
+  }
+
   const closeModal = () => {
     modal.classList.add('hidden');
     fileInput.value = '';
@@ -935,4 +960,106 @@ function escapeHtml(str) {
 function escapeQuotes(str) {
   if (!str) return '';
   return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+}
+
+// 업로드된 데이터 초기화 (기본 내장 데이터로 복원)
+async function handleResetData() {
+  const confirmed = confirm(
+    '업로드된 추가 데이터를 모두 삭제하고 초기 기본 상태(870건)로 복원하시겠습니까?\n\n' +
+    '이 작업은 취소할 수 없으며 기본 내장 설문 데이터로 되돌아갑니다.'
+  );
+  if (!confirmed) return;
+
+  showLoading(true);
+  try {
+    let totalCount = 0;
+    if (isServerAvailable) {
+      const res = await fetch('/api/reset-data', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || '초기화 실패');
+      totalCount = data.total_records;
+    } else if (window.clientEngine) {
+      totalCount = await window.clientEngine.resetUploadedData();
+    }
+
+    await checkServerAndLoadData();
+
+    // 화면 상태 초기화
+    document.getElementById('courseSearchInput').value = '';
+    document.getElementById('btnClearSearch').classList.add('hidden');
+    document.getElementById('courseDropdown').classList.add('hidden');
+    document.getElementById('instructorSelect').innerHTML = '<option value="">강사를 선택하세요</option>';
+    const btnDel = document.getElementById('btnDeleteCurrentCourse');
+    if (btnDel) btnDel.classList.add('hidden');
+
+    currentReportData = null;
+    currentSheetIndex = 0;
+    document.getElementById('emptyState').classList.remove('hidden');
+    document.getElementById('reportPaper').classList.add('hidden');
+
+    // 모달 닫기
+    const modal = document.getElementById('uploadModal');
+    if (modal) modal.classList.add('hidden');
+
+    showToast(`데이터가 초기 기본 상태(${totalCount.toLocaleString()}건)로 복원되었습니다.`);
+  } catch (err) {
+    console.error('Reset data error:', err);
+    showToast(err.message || '데이터 초기화 중 오류가 발생했습니다.', 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+// 현재 선택된 과정 데이터 삭제
+async function handleDeleteCurrentCourse() {
+  const course = document.getElementById('courseSearchInput').value.trim();
+  if (!course) {
+    showToast('삭제할 과정이 선택되지 않았습니다.', 'error');
+    return;
+  }
+
+  const confirmed = confirm(
+    `정말로 '[${course}]' 과정의 모든 설문 데이터를 삭제하시겠습니까?\n\n` +
+    '해당 과정의 모든 차수 데이터와 주관식 의견이 완전히 삭제됩니다.'
+  );
+  if (!confirmed) return;
+
+  showLoading(true);
+  try {
+    let totalCount = 0;
+    if (isServerAvailable) {
+      const res = await fetch('/api/delete-course', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ course_name: course })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || '삭제 실패');
+      totalCount = data.total_records;
+    } else if (window.clientEngine) {
+      totalCount = await window.clientEngine.deleteCourse(course);
+    }
+
+    await checkServerAndLoadData();
+
+    // 화면 상태 초기화
+    document.getElementById('courseSearchInput').value = '';
+    document.getElementById('btnClearSearch').classList.add('hidden');
+    document.getElementById('courseDropdown').classList.add('hidden');
+    document.getElementById('instructorSelect').innerHTML = '<option value="">강사를 선택하세요</option>';
+    const btnDel = document.getElementById('btnDeleteCurrentCourse');
+    if (btnDel) btnDel.classList.add('hidden');
+
+    currentReportData = null;
+    currentSheetIndex = 0;
+    document.getElementById('emptyState').classList.remove('hidden');
+    document.getElementById('reportPaper').classList.add('hidden');
+
+    showToast(`'${course}' 과정 데이터가 삭제되었습니다. (남은 데이터: ${totalCount.toLocaleString()}건)`);
+  } catch (err) {
+    console.error('Delete course error:', err);
+    showToast(err.message || '과정 데이터 삭제 중 오류가 발생했습니다.', 'error');
+  } finally {
+    showLoading(false);
+  }
 }
