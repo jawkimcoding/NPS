@@ -2,7 +2,7 @@
 let filterOptions = { courses: [], instructors: [], course_details: {}, total_records: 0 };
 let currentReportData = null;
 let currentSheetIndex = 0;
-let currentMode = 'instructor'; // 'instructor' 또는 'course'
+let currentMode = 'course'; // 'course' (교육운영 결과보고서) 또는 'instructor' (강사별 만족도)
 let charts = {}; // Chart.js 인스턴스들 보관
 let isServerAvailable = false;
 
@@ -758,9 +758,22 @@ async function saveCurrentComments() {
   }
 }
 
-// 커리큘럼 자동 저장
+// 커리큘럼 자동 저장 및 실시간 연동
 async function saveCurriculum(courseName, instructorName, text) {
   try {
+    // 메모리 상의 currentReportData에도 즉시 반영 (엑셀 다운로드 및 탭 전환 연동)
+    if (currentReportData && currentReportData.sheets) {
+      currentReportData.sheets.forEach(sheet => {
+        if (sheet.instructors) {
+          sheet.instructors.forEach(inst => {
+            if (inst.instructor_name === instructorName || !instructorName) {
+              inst.curriculum = text;
+            }
+          });
+        }
+      });
+    }
+
     if (isServerAvailable) {
       await fetch('/api/curriculum', {
         method: 'POST',
@@ -772,10 +785,12 @@ async function saveCurriculum(courseName, instructorName, text) {
         })
       });
     } else if (window.clientEngine) {
-      window.clientEngine.saveCurriculum(courseName, instructorName, text);
+      await window.clientEngine.saveCurriculum(courseName, instructorName, text);
     }
+    showToast('커리큘럼 명이 성공적으로 연동 및 저장되었습니다!');
   } catch (err) {
     console.error('Failed to auto-save curriculum:', err);
+    showToast('커리큘럼 명 저장 중 오류가 발생했습니다.', 'error');
   }
 }
 
