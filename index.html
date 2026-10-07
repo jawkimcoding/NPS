@@ -194,11 +194,11 @@
       <!-- 모드 탭 -->
       <div class="flex items-center justify-between border-b border-slate-200 pb-2">
         <div class="flex space-x-2">
-          <button id="tabInstructorMode" class="mode-tab active px-3.5 py-1.5 rounded text-xs font-bold bg-[#4472C4] text-white transition">
-            <i class="fa-solid fa-user-tie mr-1"></i> 강사별 만족도 보고서 양식
-          </button>
-          <button id="tabCourseMode" class="mode-tab px-3.5 py-1.5 rounded text-xs font-medium text-slate-700 hover:bg-slate-100 transition border border-slate-300">
+          <button id="tabCourseMode" class="mode-tab active px-3.5 py-1.5 rounded text-xs font-bold bg-[#217346] text-white transition">
             <i class="fa-solid fa-book-open mr-1"></i> 교육운영 결과보고서 양식 (과정 전체)
+          </button>
+          <button id="tabInstructorMode" class="mode-tab px-3.5 py-1.5 rounded text-xs font-medium text-slate-700 hover:bg-slate-100 transition border border-slate-300">
+            <i class="fa-solid fa-user-tie mr-1"></i> 강사별 만족도 보고서 양식
           </button>
         </div>
         <div class="flex items-center space-x-2">
@@ -230,7 +230,7 @@
         </div>
 
         <!-- 강사명 필터 -->
-        <div class="md:col-span-4" id="instructorFilterWrapper">
+        <div class="md:col-span-4" id="instructorFilterWrapper" style="display: none;">
           <label class="block text-xs font-bold text-slate-700 mb-1">강사 선택</label>
           <select id="instructorSelect" class="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 font-medium bg-white">
             <option value="">강사를 선택하세요</option>
@@ -308,7 +308,7 @@
         <thead>
           <tr>
             <th style="width: 13%;">강사</th>
-            <th style="width: 38%;">커리큘럼</th>
+            <th style="width: 38%;">커리큘럼 명 <span class="text-[9px] font-normal text-slate-500 block leading-tight">(수정 시 엑셀 자동연동)</span></th>
             <th style="width: 11%;">구분</th>
             <th style="width: 9.5%;">강의내용</th>
             <th style="width: 9.5%;">전달능력</th>
