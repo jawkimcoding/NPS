@@ -149,11 +149,9 @@ class DataManager:
                 print(f"Error loading survey store: {e}")
                 self.records = []
 
-        # 저장소가 비어있으면 기본 엑셀에서 로드
+        # 저장소가 비어있으면 0건 상태 유지
         if not self.records:
-            default_raw_file = os.path.join(BASE_DIR, "과정별설문결과_2026-09-23_로우데이터.xlsx")
-            if os.path.exists(default_raw_file):
-                self.import_raw_excel(default_raw_file)
+            self.records = []
 
         # 주관식 의견 로드
         if os.path.exists(COMMENTS_STORE_PATH):
@@ -207,11 +205,8 @@ class DataManager:
         return deleted_count
 
     def reset_to_default(self) -> int:
-        """기본 원본 로우데이터 엑셀에서 데이터를 다시 로드하여 초기 상태로 복원"""
-        default_raw_file = os.path.join(BASE_DIR, "과정별설문결과_2026-09-23_로우데이터.xlsx")
-        if os.path.exists(default_raw_file):
-            return self.import_raw_excel(default_raw_file, replace=True)
-        return len(self.records)
+        """데이터 전체 초기화 (0건으로 비우기)"""
+        return self.clear_all_records()
 
     def clear_all_records(self) -> int:
         """모든 레코드 초기화 (빈 상태)"""

@@ -149,15 +149,9 @@ class ClientEngine {
     });
   }
 
-  // 업로드된 데이터 초기화 (기본 내장 데이터로 복원)
+  // 업로드된 데이터 초기화 (0건 빈 상태로 리셋)
   async resetUploadedData() {
-    await this.deleteFromDB('custom_records');
-    await this.deleteFromDB('deleted_courses');
-    await this.deleteFromDB('is_custom_only');
-    await this.deleteFromDB('custom_comments');
-    await this.deleteFromDB('custom_curriculums');
-    await this.init();
-    return this.records.length;
+    return await this.clearAllData();
   }
 
   // 특정 과정 데이터 삭제

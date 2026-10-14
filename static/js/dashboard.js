@@ -1051,7 +1051,7 @@ function resetDashboardUI() {
 async function handleClearAllData() {
   const confirmed = confirm(
     '정말로 모든 설문 데이터를 완전히 삭제하시겠습니까?\n\n' +
-    '• 기본 870건 및 업로드된 모든 설문 데이터가 영구 삭제됩니다.\n' +
+    '• 업로드된 모든 설문 데이터가 영구 삭제됩니다.\n' +
     '• 총 데이터 건수가 0건이 되며, 새로운 엑셀 파일만 업로드하여 깨끗하게 사용하실 수 있습니다.'
   );
   if (!confirmed) return;
@@ -1080,36 +1080,9 @@ async function handleClearAllData() {
   }
 }
 
-// 2. 기본 샘플 데이터 복원 (870건)
+// 2. 데이터 초기화 (호환용)
 async function handleRestoreDefaultData() {
-  const confirmed = confirm(
-    '기본 샘플 데이터(870건) 상태로 다시 복원하시겠습니까?\n\n' +
-    '• 업로드된 데이터는 초기화되고 시스템 기본 내장 샘플 데이터가 로드됩니다.'
-  );
-  if (!confirmed) return;
-
-  closeResetModal();
-  showLoading(true);
-  try {
-    let totalCount = 0;
-    if (isServerAvailable) {
-      const res = await fetch('/api/reset-data', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || '초기화 실패');
-      totalCount = data.total_records;
-    } else if (window.clientEngine) {
-      totalCount = await window.clientEngine.resetUploadedData();
-    }
-
-    await checkServerAndLoadData();
-    resetDashboardUI();
-    showToast(`기본 샘플 데이터(${totalCount.toLocaleString()}건)로 복원되었습니다.`);
-  } catch (err) {
-    console.error('Restore default data error:', err);
-    showToast(err.message || '데이터 복원 중 오류가 발생했습니다.', 'error');
-  } finally {
-    showLoading(false);
-  }
+  return handleClearAllData();
 }
 
 // 하위 호환
