@@ -136,7 +136,7 @@
     }
     @media print {
       .no-print { display: none !important; }
-      body { background: white; padding: 0; }
+      body { background: white; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       .excel-paper { box-shadow: none; border: none; padding: 0; max-width: 100%; }
       .badge-select {
         border: none !important;
@@ -145,6 +145,7 @@
         appearance: none;
         background: inherit !important;
       }
+      canvas { max-width: 100% !important; }
     }
   </style>
 </head>

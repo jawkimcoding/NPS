@@ -926,35 +926,45 @@ class ClientEngine {
   }
 
   updateChartXml(xmlContent, categories, values, isRef = false, isFloat = false) {
+    // 비정상 값(NaN, undefined, null, 빈 문자열, Infinity)이 차트 XML에 "NaN"으로 기록되면
+    // 엑셀이 파일 복구 과정에서 차트를 제거/손상시키므로 반드시 유한한 숫자로 정제
+    const cats = (categories || []).map(c => (c == null ? '' : String(c)));
+    const safeNum = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const vals = cats.map((_, i) => safeNum((values || [])[i]));
+
     // Categories (X축)
-    const ptsCat = (categories || []).map((c, i) => `<c:pt idx="${i}"><c:v>${this.escapeXml(c)}</c:v></c:pt>`).join('');
+    const ptsCat = cats.map((c, i) => `<c:pt idx="${i}"><c:v>${this.escapeXml(c)}</c:v></c:pt>`).join('');
+    // 치환 문자열 내 '$&', "$'" 등이 특수 패턴으로 해석되지 않도록 함수형 치환 사용
     if (isRef) {
-      const newCat = `<c:strCache><c:ptCount val="${categories.length}"/>${ptsCat}</c:strCache>`;
-      xmlContent = xmlContent.replace(/(<c:f>.*?<\/c:f>)\s*<c:strCache>.*?<\/c:strCache>/s, `$1${newCat}`);
-      xmlContent = xmlContent.replace(/(<c16:filteredLitCache>)\s*<c:strCache>.*?<\/c:strCache>/s, `$1${newCat}`);
+      const newCat = `<c:strCache><c:ptCount val="${cats.length}"/>${ptsCat}</c:strCache>`;
+      xmlContent = xmlContent.replace(/(<c:f>.*?<\/c:f>)\s*<c:strCache>.*?<\/c:strCache>/s, (_, p1) => p1 + newCat);
+      xmlContent = xmlContent.replace(/(<c16:filteredLitCache>)\s*<c:strCache>.*?<\/c:strCache>/s, (_, p1) => p1 + newCat);
     } else {
-      const newCat = `<c:strLit><c:ptCount val="${categories.length}"/>${ptsCat}</c:strLit>`;
-      xmlContent = xmlContent.replace(/<c:strLit>.*?<\/c:strLit>/s, newCat);
+      const newCat = `<c:strLit><c:ptCount val="${cats.length}"/>${ptsCat}</c:strLit>`;
+      xmlContent = xmlContent.replace(/<c:strLit>.*?<\/c:strLit>/s, () => newCat);
     }
 
     // Values (Y축 수치)
     let ptsVal;
     let fmt;
     if (isFloat) {
-      ptsVal = (values || []).map((v, i) => `<c:pt idx="${i}"><c:v>${Number(v).toFixed(1)}</c:v></c:pt>`).join('');
+      ptsVal = vals.map((v, i) => `<c:pt idx="${i}"><c:v>${v.toFixed(1)}</c:v></c:pt>`).join('');
       fmt = "0.0";
     } else {
-      ptsVal = (values || []).map((v, i) => `<c:pt idx="${i}"><c:v>${Math.round(Number(v))}</c:v></c:pt>`).join('');
+      ptsVal = vals.map((v, i) => `<c:pt idx="${i}"><c:v>${Math.round(v)}</c:v></c:pt>`).join('');
       fmt = "General";
     }
 
     if (isRef) {
-      const newVal = `<c:numCache><c:formatCode>${fmt}</c:formatCode><c:ptCount val="${values.length}"/>${ptsVal}</c:numCache>`;
-      xmlContent = xmlContent.replace(/(<c:f>.*?<\/c:f>)\s*<c:numCache>.*?<\/c:numCache>/s, `$1${newVal}`);
-      xmlContent = xmlContent.replace(/(<c16:filteredLitCache>)\s*<c:numCache>.*?<\/c:numCache>/s, `$1${newVal}`);
+      const newVal = `<c:numCache><c:formatCode>${fmt}</c:formatCode><c:ptCount val="${vals.length}"/>${ptsVal}</c:numCache>`;
+      xmlContent = xmlContent.replace(/(<c:f>.*?<\/c:f>)\s*<c:numCache>.*?<\/c:numCache>/s, (_, p1) => p1 + newVal);
+      xmlContent = xmlContent.replace(/(<c16:filteredLitCache>)\s*<c:numCache>.*?<\/c:numCache>/s, (_, p1) => p1 + newVal);
     } else {
-      const newVal = `<c:numLit><c:formatCode>${fmt}</c:formatCode><c:ptCount val="${values.length}"/>${ptsVal}</c:numLit>`;
-      xmlContent = xmlContent.replace(/<c:numLit>.*?<\/c:numLit>/s, newVal);
+      const newVal = `<c:numLit><c:formatCode>${fmt}</c:formatCode><c:ptCount val="${vals.length}"/>${ptsVal}</c:numLit>`;
+      xmlContent = xmlContent.replace(/<c:numLit>.*?<\/c:numLit>/s, () => newVal);
     }
 
     return xmlContent;

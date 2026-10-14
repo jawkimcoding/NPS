@@ -2,6 +2,7 @@ import os
 import io
 import re
 import zipfile
+import math
 from typing import Dict, Any, List, Optional
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,31 +29,44 @@ def update_chart_xml(xml_content: str, categories: List[Any], values: List[Any],
     - is_ref: strRef / numRef 형식 (Chart 0, Chart 1)
     - not is_ref: strLit / numLit 형식 (Chart 2 ~ Chart 5)
     """
+    # 비정상 값(None, NaN, 빈 문자열 등)은 0으로 정제 (예외 발생/차트 손상 방지)
+    def _safe_num(v) -> float:
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return n if math.isfinite(n) else 0.0
+
+    categories = ["" if c is None else str(c) for c in (categories or [])]
+    values = list(values or [])
+    values = [_safe_num(values[i]) if i < len(values) else 0.0 for i in range(len(categories))]
+
     # 1. Categories (X축)
+    # 치환 문자열의 역슬래시가 정규식 그룹 참조로 해석되지 않도록 lambda 치환 사용
     pts_cat = "".join([f'<c:pt idx="{i}"><c:v>{escape_xml(c)}</c:v></c:pt>' for i, c in enumerate(categories)])
     if is_ref:
         new_cat = f'<c:strCache><c:ptCount val="{len(categories)}"/>{pts_cat}</c:strCache>'
-        xml_content = re.sub(r'(<c:f>.*?</c:f>)\s*<c:strCache>.*?</c:strCache>', rf'\g<1>{new_cat}', xml_content, flags=re.DOTALL)
-        xml_content = re.sub(r'(<c16:filteredLitCache>)\s*<c:strCache>.*?</c:strCache>', rf'\g<1>{new_cat}', xml_content, flags=re.DOTALL)
+        xml_content = re.sub(r'(<c:f>.*?</c:f>)\s*<c:strCache>.*?</c:strCache>', lambda m: m.group(1) + new_cat, xml_content, flags=re.DOTALL)
+        xml_content = re.sub(r'(<c16:filteredLitCache>)\s*<c:strCache>.*?</c:strCache>', lambda m: m.group(1) + new_cat, xml_content, flags=re.DOTALL)
     else:
         new_cat = f'<c:strLit><c:ptCount val="{len(categories)}"/>{pts_cat}</c:strLit>'
-        xml_content = re.sub(r'<c:strLit>.*?</c:strLit>', new_cat, xml_content, flags=re.DOTALL)
+        xml_content = re.sub(r'<c:strLit>.*?</c:strLit>', lambda m: new_cat, xml_content, count=1, flags=re.DOTALL)
 
     # 2. Values (Y축 수치)
     if is_float:
-        pts_val = "".join([f'<c:pt idx="{i}"><c:v>{float(v):.1f}</c:v></c:pt>' for i, v in enumerate(values)])
+        pts_val = "".join([f'<c:pt idx="{i}"><c:v>{v:.1f}</c:v></c:pt>' for i, v in enumerate(values)])
         fmt = "0.0"
     else:
-        pts_val = "".join([f'<c:pt idx="{i}"><c:v>{int(round(float(v)))}</c:v></c:pt>' for i, v in enumerate(values)])
+        pts_val = "".join([f'<c:pt idx="{i}"><c:v>{int(round(v))}</c:v></c:pt>' for i, v in enumerate(values)])
         fmt = "General"
 
     if is_ref:
         new_val = f'<c:numCache><c:formatCode>{fmt}</c:formatCode><c:ptCount val="{len(values)}"/>{pts_val}</c:numCache>'
-        xml_content = re.sub(r'(<c:f>.*?</c:f>)\s*<c:numCache>.*?</c:numCache>', rf'\g<1>{new_val}', xml_content, flags=re.DOTALL)
-        xml_content = re.sub(r'(<c16:filteredLitCache>)\s*<c:numCache>.*?</c:numCache>', rf'\g<1>{new_val}', xml_content, flags=re.DOTALL)
+        xml_content = re.sub(r'(<c:f>.*?</c:f>)\s*<c:numCache>.*?</c:numCache>', lambda m: m.group(1) + new_val, xml_content, flags=re.DOTALL)
+        xml_content = re.sub(r'(<c16:filteredLitCache>)\s*<c:numCache>.*?</c:numCache>', lambda m: m.group(1) + new_val, xml_content, flags=re.DOTALL)
     else:
         new_val = f'<c:numLit><c:formatCode>{fmt}</c:formatCode><c:ptCount val="{len(values)}"/>{pts_val}</c:numLit>'
-        xml_content = re.sub(r'<c:numLit>.*?</c:numLit>', new_val, xml_content, flags=re.DOTALL)
+        xml_content = re.sub(r'<c:numLit>.*?</c:numLit>', lambda m: new_val, xml_content, count=1, flags=re.DOTALL)
 
     return xml_content
 

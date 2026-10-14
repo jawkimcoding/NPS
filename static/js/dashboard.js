@@ -347,53 +347,73 @@ function renderCurrentSheet() {
 
 // 6개 차트 렌더링
 function renderAllCharts(chartsData) {
+  if (!chartsData) return;
   const chartBlue = '#4472C4'; // Office 기본 테마 단색 블루
 
+  const c0 = chartsData.chart0_satisfaction_trend || { categories: [], values: [] };
+  const c1 = chartsData.chart1_nps_trend || { categories: [], values: [] };
+  const c2 = chartsData.chart2_complaints || { categories: [], values: [] };
+  const c3 = chartsData.chart3_preferred_format || { categories: [], values: [] };
+  const c4 = chartsData.chart4_positions || { categories: [], values: [] };
+  const c5 = chartsData.chart5_motives || { categories: [], values: [] };
+
   // Chart 0: 교육과정내용 만족도 추이 (1회차: 막대그래프, 누적 2회차 이상: 꺾은선그래프)
-  renderTrendChart('chartSatisfactionTrend', chartsData.chart0_satisfaction_trend.categories, chartsData.chart0_satisfaction_trend.values, '만족도', chartBlue, 5);
+  renderTrendChart('chartSatisfactionTrend', c0.categories, c0.values, '만족도', chartBlue, 5);
 
   // Chart 1: 추천지수(NPS) 추이 (1회차: 막대그래프, 누적 2회차 이상: 꺾은선그래프)
-  renderTrendChart('chartNpsTrend', chartsData.chart1_nps_trend.categories, chartsData.chart1_nps_trend.values, 'NPS', chartBlue, 100);
+  renderTrendChart('chartNpsTrend', c1.categories, c1.values, 'NPS', chartBlue, 100);
 
   // Chart 4: 교육생 직급 (Half Width)
-  renderBarChart('chartPositions', chartsData.chart4_positions.categories, chartsData.chart4_positions.values, '인원', chartBlue);
+  renderBarChart('chartPositions', c4.categories, c4.values, '인원', chartBlue);
 
   // Chart 3: 희망 교육형태 (Half Width)
-  renderBarChart('chartPreferredFormat', chartsData.chart3_preferred_format.categories, chartsData.chart3_preferred_format.values, '인원', chartBlue);
+  renderBarChart('chartPreferredFormat', c3.categories, c3.values, '인원', chartBlue);
 
   // Chart 5: 과정정보 출처 (Half Width)
-  renderBarChart('chartMotives', chartsData.chart5_motives.categories, chartsData.chart5_motives.values, '인원', chartBlue);
+  renderBarChart('chartMotives', c5.categories, c5.values, '인원', chartBlue);
 
   // Chart 2: 교육운영 불편요소 (Half Width)
-  renderBarChart('chartComplaints', chartsData.chart2_complaints.categories, chartsData.chart2_complaints.values, '건수', chartBlue);
+  renderBarChart('chartComplaints', c2.categories, c2.values, '건수', chartBlue);
+}
+
+// 수치 안전 변환 헬퍼 (NaN, null, undefined, 비정상 문자열을 0으로 정제)
+function sanitizeChartNumber(v, defaultVal = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : defaultVal;
 }
 
 // 만족도 및 NPS 추이 차트 (1회차는 막대, 2회차 이상 누적 시 꺾은선으로 렌더링)
 function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
   if (charts[canvasId]) {
-    charts[canvasId].destroy();
+    try { charts[canvasId].destroy(); } catch (e) {}
+    delete charts[canvasId];
   }
 
-  const isLine = labels && labels.length > 1;
-  const ctx = document.getElementById(canvasId).getContext('2d');
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const safeLabels = (labels || []).map(l => (l == null ? '' : String(l)));
+  const isLine = safeLabels.length > 1;
 
   // 데이터 정제 (만족도는 0~5.0 범위 강제, NPS는 -100~100)
-  const cleanData = (data || []).map(v => {
-    const num = Number(v) || 0;
+  const isNps = label === 'NPS';
+  const cleanData = safeLabels.map((_, i) => {
+    const rawVal = sanitizeChartNumber((data || [])[i], 0);
     if (label === '만족도') {
-      return Number(Math.min(5.0, Math.max(0, num)).toFixed(1));
+      return Number(Math.min(5.0, Math.max(0, rawVal)).toFixed(1));
     }
-    return Number(num.toFixed(1));
+    return Number(rawVal.toFixed(1));
   });
 
-  const isNps = label === 'NPS';
   const minVal = isNps && cleanData.some(v => v < 0) ? -100 : 0;
 
   if (isLine) {
     charts[canvasId] = new Chart(ctx, {
       type: 'line',
       data: {
-        labels: labels,
+        labels: safeLabels,
         datasets: [{
           label: label,
           data: cleanData,
@@ -412,6 +432,7 @@ function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: { duration: 250 }, // 렌더링 지연/인쇄 깨짐 방지
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -439,23 +460,31 @@ function renderTrendChart(canvasId, labels, data, label, color, maxVal = null) {
       }
     });
   } else {
-    renderBarChart(canvasId, labels, cleanData, label, color, maxVal);
+    renderBarChart(canvasId, safeLabels, cleanData, label, color, maxVal);
   }
 }
 
 function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {
   if (charts[canvasId]) {
-    charts[canvasId].destroy();
+    try { charts[canvasId].destroy(); } catch (e) {}
+    delete charts[canvasId];
   }
 
-  const ctx = document.getElementById(canvasId).getContext('2d');
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const safeLabels = (labels || []).map(l => (l == null ? '' : String(l)));
+  const cleanData = safeLabels.map((_, i) => sanitizeChartNumber((data || [])[i], 0));
+
   charts[canvasId] = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: labels,
+      labels: safeLabels,
       datasets: [{
         label: label,
-        data: data,
+        data: cleanData,
         backgroundColor: color,
         borderRadius: 0,
         maxBarThickness: 45
@@ -464,6 +493,7 @@ function renderBarChart(canvasId, labels, data, label, color, maxVal = null) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: { duration: 250 }, // 렌더링 지연/인쇄 깨짐 방지
       plugins: {
         legend: { display: false },
         tooltip: {
