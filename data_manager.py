@@ -383,21 +383,32 @@ class DataManager:
         if replace:
             self.records = []
 
+        def make_norm_key(c_name, s_date, s_raw, i_name):
+            c = re.sub(r'\s+', ' ', str(c_name or '')).strip()
+            d = str(s_date or s_raw or '').strip()
+            i = re.sub(r'\s+', ' ', str(i_name or '')).strip()
+            return f"{c}_{d}_{i}"
+
         imported_count = 0
         existing_keys = {
-            f"{r.get('course_name')}_{r.get('start_date') or r.get('schedule_raw')}_{r.get('instructor_name')}": idx 
+            make_norm_key(r.get('course_name'), r.get('start_date'), r.get('schedule_raw'), r.get('instructor_name')): idx 
             for idx, r in enumerate(self.records)
         }
 
+        invalid_course_kws = {'과정명', '과정정보', '총계', '소계', '합계', '평균', 'total', '합 계', '소 계', '총 계'}
+
         for row_idx in range(best_header_row_idx + 1, ws.max_row + 1):
-            course_name = ws.cell(row_idx, c_course).value
-            if not course_name or str(course_name).strip() == '' or str(course_name).strip() in ['과정명', '과정정보']:
+            raw_course_val = ws.cell(row_idx, c_course).value
+            if not raw_course_val:
                 continue
             
-            course_name = str(course_name).strip()
+            course_name = re.sub(r'\s+', ' ', str(raw_course_val)).strip()
+            if not course_name or course_name.lower() in invalid_course_kws:
+                continue
+            
             schedule_raw = str(ws.cell(row_idx, c_sched).value or "").strip()
             region = str(ws.cell(row_idx, c_region).value or "").strip()
-            instructor_name = str(ws.cell(row_idx, c_inst).value or "").strip()
+            instructor_name = re.sub(r'\s+', ' ', str(ws.cell(row_idx, c_inst).value or "")).strip()
 
             # [자가치유 1] 강사명과 교육일정이 뒤바뀐 경우 감지 및 교정
             def is_date_like(val_str: str) -> bool:
@@ -427,6 +438,9 @@ class DataManager:
             # [자가치유 2] 발송수, 응답수, 만족도, NPS 자동 교정
             raw_sent = safe_int(ws.cell(row_idx, c_sent).value)
             raw_resp = safe_int(ws.cell(row_idx, c_resp).value)
+            if not schedule_raw and not instructor_name and raw_sent == 0 and raw_resp == 0:
+                continue
+
             raw_nps = safe_float(ws.cell(row_idx, c_nps).value)
             raw_sat = safe_float(ws.cell(row_idx, c_course_sat).value)
 
@@ -526,7 +540,7 @@ class DataManager:
                 "instructor_code": str(ws.cell(row_idx, 41).value or ""),
             }
 
-            key = f"{course_name}_{sched_info['start_date'] or schedule_raw}_{instructor_name}"
+            key = make_norm_key(course_name, sched_info.get('start_date'), schedule_raw, instructor_name)
             if key in existing_keys:
                 self.records[existing_keys[key]] = record
             else:

@@ -10,6 +10,13 @@ class ClientEngine {
     this.initPromise = this.init();
   }
 
+  getNormKey(r) {
+    const c = (r.course_name || '').trim().replace(/\s+/g, ' ');
+    const d = (r.start_date || r.schedule_raw || '').trim();
+    const i = (r.instructor_name || '').trim().replace(/\s+/g, ' ');
+    return `${c}_${d}_${i}`;
+  }
+
   async init() {
     // 1. 기본 내장 데이터 로드
     const defaultRecords = window.DEFAULT_SURVEY_RECORDS || [];
@@ -21,6 +28,7 @@ class ClientEngine {
     let extraComments = {};
     let extraCurriculums = {};
     let deletedCourses = [];
+    let isCustomOnly = false;
 
     try {
       this.db = await this.openIndexedDB();
@@ -28,6 +36,7 @@ class ClientEngine {
       extraComments = (await this.getFromDB('custom_comments')) || {};
       extraCurriculums = (await this.getFromDB('custom_curriculums')) || {};
       deletedCourses = (await this.getFromDB('deleted_courses')) || [];
+      isCustomOnly = (await this.getFromDB('is_custom_only')) || false;
     } catch (e) {
       console.warn('IndexedDB unavailable, falling back to LocalStorage:', e);
       try {
@@ -35,26 +44,33 @@ class ClientEngine {
         extraComments = JSON.parse(localStorage.getItem('kpc_custom_comments') || '{}');
         extraCurriculums = JSON.parse(localStorage.getItem('kpc_custom_curriculums') || '{}');
         deletedCourses = JSON.parse(localStorage.getItem('kpc_deleted_courses') || '[]');
+        isCustomOnly = JSON.parse(localStorage.getItem('kpc_is_custom_only') || 'false');
       } catch (err) {}
     }
 
     // 3. 레코드 병합 (과정명_일정_강사명 기준 중복 방지, 삭제된 과정 제외)
     const deletedSet = new Set(deletedCourses);
     const recordMap = new Map();
-    defaultRecords.forEach(r => {
-      if (!deletedSet.has(r.course_name)) {
-        recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r);
-      }
-    });
+
+    // isCustomOnly가 아닐 때만 기본 내장 데이터 반영
+    if (!isCustomOnly) {
+      defaultRecords.forEach(r => {
+        if (!deletedSet.has(r.course_name)) {
+          recordMap.set(this.getNormKey(r), r);
+        }
+      });
+    }
+
+    // 업로드된 커스텀 레코드 반영 (우선순위 높음)
     extraRecords.forEach(r => {
       if (!deletedSet.has(r.course_name)) {
-        recordMap.set(`${r.course_name}_${r.schedule_raw}_${r.instructor_name}`, r);
+        recordMap.set(this.getNormKey(r), r);
       }
     });
 
     this.records = Array.from(recordMap.values());
-    this.comments = { ...defaultComments, ...extraComments };
-    this.curriculums = { ...defaultCurriculums, ...extraCurriculums };
+    this.comments = isCustomOnly ? extraComments : { ...defaultComments, ...extraComments };
+    this.curriculums = isCustomOnly ? extraCurriculums : { ...defaultCurriculums, ...extraCurriculums };
   }
 
   openIndexedDB() {
@@ -137,6 +153,9 @@ class ClientEngine {
   async resetUploadedData() {
     await this.deleteFromDB('custom_records');
     await this.deleteFromDB('deleted_courses');
+    await this.deleteFromDB('is_custom_only');
+    await this.deleteFromDB('custom_comments');
+    await this.deleteFromDB('custom_curriculums');
     await this.init();
     return this.records.length;
   }
@@ -180,11 +199,8 @@ class ClientEngine {
 
   // 전체 데이터 완전 비우기 (0건 상태)
   async clearAllData() {
-    const defaultCourses = (window.DEFAULT_SURVEY_RECORDS || []).map(r => r.course_name);
-    const currentCourses = (this.records || []).map(r => r.course_name);
-    const allCourses = Array.from(new Set([...defaultCourses, ...currentCourses]));
-    
-    await this.saveToDB('deleted_courses', allCourses);
+    await this.saveToDB('is_custom_only', true);
+    await this.saveToDB('deleted_courses', []);
     await this.saveToDB('custom_records', []);
     await this.saveToDB('custom_comments', {});
     await this.saveToDB('custom_curriculums', {});
@@ -638,16 +654,18 @@ class ClientEngine {
 
           // 2. 데이터 행 파싱 및 값 기반 자가 치유(Sanity Check & Auto-Healing)
           const newRecords = [];
+          const invalidCourseKeywords = ['과정명', '과정정보', '총계', '소계', '합계', '평균', 'total', '합 계', '소 계', '총 계'];
+
           for (let r = bestHeaderRowIdx + 1; r < rows.length; r++) {
             const row = rows[r];
             if (!row || !row[idxCourse]) continue;
 
-            let courseName = String(row[idxCourse]).trim();
-            if (!courseName || courseName === '과정명' || courseName === '과정정보') continue;
+            let courseName = String(row[idxCourse] || '').trim().replace(/\s+/g, ' ');
+            if (!courseName || invalidCourseKeywords.some(kw => courseName.toLowerCase() === kw.toLowerCase())) continue;
 
             let schedRaw = String(row[idxSched] || '').trim();
             let region = String(row[idxRegion] || '').trim();
-            let instName = String(row[idxInst] || '').trim();
+            let instName = String(row[idxInst] || '').trim().replace(/\s+/g, ' ');
 
             // [자가치유 1] 강사명과 교육일정이 뒤바뀐 경우(Swap) 감지 및 교정
             const isDateLike = (str) => /^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(str) || /^\[\s*\d{4}/.test(str) || /^\d{5}(?:\.\d+)?$/.test(str);
@@ -675,6 +693,8 @@ class ClientEngine {
             // [자가치유 2] 발송수, 응답수, 과정만족도, NPS 상호 오인식 자동 교정
             let rawSent = parseInt(row[idxSent]) || 0;
             let rawResp = parseInt(row[idxResp]) || 0;
+            if (!schedRaw && !instName && rawSent === 0 && rawResp === 0) continue;
+
             let rawNps = parseFloat(row[idxNps]) || 0;
             let rawSat = parseFloat(row[idxCourseSat]) || 0;
 
@@ -789,38 +809,29 @@ class ClientEngine {
             throw new Error('유효한 데이터 행을 추출하지 못했습니다. 파일 구조를 확인해 주세요.');
           }
 
-          // 정규화된 키 기반 중복 제거 및 Upsert
-          const getNormKey = (r) => {
-            const c = (r.course_name || '').trim().replace(/\s+/g, ' ');
-            const d = (r.start_date || r.schedule_raw || '').trim();
-            const i = (r.instructor_name || '').trim();
-            return `${c}_${d}_${i}`;
-          };
-
           let mergedExtra = [];
           if (replaceMode) {
-            // 기본 내장 870건 데이터 중 새 파일에 없는 과정들을 deleted_courses에 넣어 숨김 처리
-            const defaultCourses = (window.DEFAULT_SURVEY_RECORDS || []).map(r => r.course_name);
-            const newCourseNames = new Set(newRecords.map(r => r.course_name));
-            const coursesToHide = defaultCourses.filter(c => !newCourseNames.has(c));
-            await this.saveToDB('deleted_courses', coursesToHide);
+            // 새 데이터로 100% 교체: 기본 내장 870건을 완전히 배제하고 업로드된 데이터만 사용
+            await this.saveToDB('is_custom_only', true);
+            await this.saveToDB('deleted_courses', []);
 
             const recordMap = new Map();
-            newRecords.forEach(r => recordMap.set(getNormKey(r), r));
+            newRecords.forEach(r => recordMap.set(this.getNormKey(r), r));
             mergedExtra = Array.from(recordMap.values());
           } else {
-            const existingExtra = (await this.getFromDB('custom_records')) || [];
+            // 기존 데이터에 누적 병합
             const recordMap = new Map();
-            existingExtra.forEach(r => recordMap.set(getNormKey(r), r));
-            newRecords.forEach(r => recordMap.set(getNormKey(r), r));
+            this.records.forEach(r => recordMap.set(this.getNormKey(r), r));
+            newRecords.forEach(r => recordMap.set(this.getNormKey(r), r));
             mergedExtra = Array.from(recordMap.values());
+            await this.saveToDB('is_custom_only', true);
           }
 
           await this.saveToDB('custom_records', mergedExtra);
 
           // 메모리 상태 재동기화
           await this.init();
-          resolve(newRecords.length);
+          resolve(mergedExtra.length);
         } catch (err) {
           console.error('parseAndMergeExcel error:', err);
           reject(err);
